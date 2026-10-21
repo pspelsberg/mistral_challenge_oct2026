@@ -1,0 +1,54 @@
+{
+  "rogue_version": "epyx-1.49",
+  "updated_at": "2026-10-21T15:06:51.207939+00:00",
+  "sessions_analyzed": 3,
+  "processed_session_ids": [
+    "20261021_090137_395695_steam_epyx-1.49_live",
+    "20261021_093922_869551_steam_epyx-1.49_live",
+    "20261021_150258_956389_steam_epyx-1.49_live"
+  ],
+  "total_turns_logged": 68,
+  "total_monsters_defeated": 0,
+  "max_depth_ever": 1,
+  "max_gold_ever": 0,
+  "bestiary": {},
+  "tactical_lessons": [],
+  "recent_post_mortems": [
+    {
+      "session_id": "20261021_090137_395695_steam_epyx-1.49_live",
+      "rogue_version": "epyx-1.49",
+      "turns_survived": 14,
+      "max_depth": 1,
+      "rooms_discovered": 2,
+      "gold_collected": 0,
+      "monsters_defeated": 0,
+      "final_state": "PLAYING",
+      "termination_reason": "paused_on_safety_guard:Game window 0x540000f is no longer viewable or was closed.",
+      "distilled_lesson": "Reached depth 1, explored 2 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING)."
+    },
+    {
+      "session_id": "20261021_093922_869551_steam_epyx-1.49_live",
+      "rogue_version": "epyx-1.49",
+      "turns_survived": 4,
+      "max_depth": 1,
+      "rooms_discovered": 1,
+      "gold_collected": 0,
+      "monsters_defeated": 0,
+      "final_state": "UNKNOWN",
+      "termination_reason": "paused_on_safety_guard:Game window 0x540000f is no longer viewable or was closed.",
+      "distilled_lesson": "Reached depth 1, explored 1 room(s), collected 0 gold, defeated 0 monster(s) (UNKNOWN)."
+    },
+    {
+      "session_id": "20261021_150258_956389_steam_epyx-1.49_live",
+      "rogue_version": "epyx-1.49",
+      "turns_survived": 50,
+      "max_depth": 1,
+      "rooms_discovered": 5,
+      "gold_collected": 0,
+      "monsters_defeated": 0,
+      "final_state": "PLAYING",
+      "termination_reason": "paused_on_safety_guard:Game window 0x540000f is no longer viewable or was closed.",
+      "distilled_lesson": "Reached depth 1, explored 5 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING)."
+    }
+  ]
+}

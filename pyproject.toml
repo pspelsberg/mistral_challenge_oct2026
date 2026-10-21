@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rogue-agent"
+version = "0.1.0"
+description = "Dual-Backend Autonomous AI Gaming Harness for Rogue (Mistral AI 'Le Chonk wants to play' Challenge)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Peppi" }
+]
+dependencies = [
+    "mistralai>=1.2.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "python-dotenv>=1.0.1",
+    "pyte>=0.8.2",
+    "pillow>=10.3.0",
+    "mss>=9.0.1",
+    "python-xlib>=0.33",
+    "rich>=13.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.5.0",
+]
+
+[project.scripts]
+rogue-agent = "rogue_agent.features.game_loop_cli.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rogue_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "unit: Level 1 fast unit tests with mocks and recorded observations",
+    "integration: Level 2 real process/PTY/X11 integration tests",
+    "e2e: Level 3 end-to-end loop tests",
+    "steam_live: Interactive tests requiring active Steam/DOSBox window",
+    "billable: Tests that call the live Mistral API (require explicit approval)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
