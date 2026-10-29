@@ -1,12 +1,12 @@
 # Le Chonk's Recursive Dungeon Playbook
 
 - **Target Rogue Version**: `epyx-1.49`
-- **Sessions Analyzed**: `26`
-- **Total Turns Logged**: `737`
+- **Sessions Analyzed**: `27`
+- **Total Turns Logged**: `767`
 - **Total Monsters Defeated**: `7`
 - **Max Dungeon Depth Reached**: `Level 3`
 - **Max Gold Collected in a Run**: `91`
-- **Last Updated (UTC)**: `2026-10-29T17:51:19.502308+00:00`
+- **Last Updated (UTC)**: `2026-10-29T18:07:13.606163+00:00`
 
 > **Epistemic Hygiene Rule**: Seed-randomized properties (map coordinates, unidentified potion colors, and scroll titles) are strictly excluded from cross-session memory. Only version-invariant combat telemetry and tactical post-mortems are persisted.
 
@@ -26,7 +26,6 @@
 
 | Session ID | Turns | Max Depth | Rooms | Gold | Kills | Outcome | Post-Mortem Lesson |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `20261026_152348_272160_steam_epyx-1.49_live` | 40 | 1 | 1 | 0 | 0 | `PLAYING` | Reached depth 1, explored 1 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING). |
 | `20261026_153153_709966_steam_epyx-1.49_live` | 10 | 1 | 2 | 0 | 0 | `PLAYING` | Reached depth 1, explored 2 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING). |
 | `20261026_154157_447938_steam_epyx-1.49_live` | 26 | 1 | 2 | 0 | 0 | `PLAYING` | Reached depth 1, explored 2 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING). |
 | `20261026_160450_439895_steam_epyx-1.49_live` | 40 | 1 | 3 | 0 | 0 | `PLAYING` | Reached depth 1, explored 3 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING). |
@@ -38,3 +37,4 @@
 | `20261029_172851_183261_steam_epyx-1.49_live` | 8 | 1 | 2 | 0 | 0 | `PLAYING` | Reached depth 1, explored 2 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING). |
 | `20261029_174403_199010_steam_epyx-1.49_live` | 4 | 1 | 2 | 0 | 0 | `PLAYING` | Reached depth 1, explored 2 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING). |
 | `20261029_174913_925284_steam_epyx-1.49_live` | 7 | 1 | 1 | 0 | 0 | `PLAYING` | Reached depth 1, explored 1 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING). |
+| `20261029_180010_437279_steam_epyx-1.49_live` | 30 | 1 | 7 | 0 | 0 | `PLAYING` | Reached depth 1, explored 7 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING). |
