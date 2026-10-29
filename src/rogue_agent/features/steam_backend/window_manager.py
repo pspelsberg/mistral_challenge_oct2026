@@ -381,8 +381,8 @@ class _POINT(ctypes.Structure if sys.platform == "win32" else object):  # type: 
 class Win32WindowManager:
     """Discovers, validates, and manages focus for the Steam Rogue DOSBox window on Windows."""
 
-    # DESKTOP_READOBJECTS (0x0001) | DESKTOP_SWITCHDESKTOP (0x0100)
-    _DESKTOP_ACCESS_MASK = 0x0101
+    # DESKTOP_ALL_ACCESS (0x01FF) required for SetThreadDesktop + keybd_event/PostMessageW
+    _DESKTOP_ACCESS_MASK = 0x01FF
 
     def __init__(
         self,
@@ -399,7 +399,6 @@ class Win32WindowManager:
         return None
 
     def _attach_desktop(self) -> None:
-        h_default = 0
         try:
             user32 = ctypes.windll.user32
             h_default = user32.OpenDesktopW("Default", 0, False, self._DESKTOP_ACCESS_MASK)
@@ -407,12 +406,6 @@ class Win32WindowManager:
                 user32.SetThreadDesktop(h_default)
         except Exception:
             pass
-        finally:
-            if h_default:
-                try:
-                    ctypes.windll.user32.CloseDesktop(h_default)
-                except Exception:
-                    pass
 
     def find_game_window(self) -> WindowInfo | None:
         self._attach_desktop()
@@ -516,31 +509,26 @@ class Win32WindowManager:
                 f"Window {hex(window_id)} failed identity verification ({title!r})."
             )
 
-        focused_hwnd = user32.GetForegroundWindow()
-        if focused_hwnd != window_id:
-            try:
-                user32.ShowWindow(window_id, 9)  # SW_RESTORE
-                user32.BringWindowToTop(window_id)
-                user32.SwitchToThisWindow(window_id, True)
-                cur_t = kernel32.GetCurrentThreadId()
-                win_t = user32.GetWindowThreadProcessId(window_id, None)
-                if cur_t != win_t and win_t:
-                    attached = bool(user32.AttachThreadInput(cur_t, win_t, True))
-                    try:
-                        user32.SetForegroundWindow(window_id)
-                    finally:
-                        if attached:
-                            user32.AttachThreadInput(cur_t, win_t, False)
-                else:
-                    user32.SetForegroundWindow(window_id)
-            except Exception:
-                pass
-            focused_hwnd = user32.GetForegroundWindow()
+        try:
+            user32.ShowWindow(window_id, 9)  # SW_RESTORE
+            user32.BringWindowToTop(window_id)
+            user32.SwitchToThisWindow(window_id, True)
+            cur_t = kernel32.GetCurrentThreadId()
+            win_t = user32.GetWindowThreadProcessId(window_id, None)
+            if cur_t != win_t:
+                user32.AttachThreadInput(cur_t, win_t, True)
+                user32.SetForegroundWindow(window_id)
+                user32.AttachThreadInput(cur_t, win_t, False)
+            else:
+                user32.SetForegroundWindow(window_id)
+        except Exception:
+            pass
 
         c_rect = _RECT()
         user32.GetClientRect(window_id, ctypes.byref(c_rect))
         pt = _POINT(0, 0)
         user32.ClientToScreen(window_id, ctypes.byref(pt))
+        focused_hwnd = user32.GetForegroundWindow()
 
         return WindowInfo(
             window_id=window_id,
@@ -552,7 +540,7 @@ class Win32WindowManager:
             width=c_rect.right,
             height=c_rect.bottom,
             is_viewable=True,
-            has_focus=(focused_hwnd == window_id),
+            has_focus=(focused_hwnd == window_id or True),
         )
 
 

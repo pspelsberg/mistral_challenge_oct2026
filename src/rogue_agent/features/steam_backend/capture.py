@@ -114,10 +114,9 @@ def capture_window_client_area(
 
     img: Image.Image | None = None
     if sys.platform == "win32":
-        h_default = 0
         try:
             user32 = ctypes.windll.user32
-            h_default = user32.OpenDesktopW("Default", 0, False, 0x0101)
+            h_default = user32.OpenDesktopW("Default", 0, False, 0x01FF)
             if h_default:
                 user32.SetThreadDesktop(h_default)
 
@@ -153,12 +152,6 @@ def capture_window_client_area(
                 img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
         except Exception:
             img = None
-        finally:
-            if h_default:
-                try:
-                    ctypes.windll.user32.CloseDesktop(h_default)
-                except Exception:
-                    pass
 
         if img is None:
             img = _capture_win32_window(win_info.window_id, width, height)

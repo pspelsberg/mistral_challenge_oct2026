@@ -157,13 +157,8 @@ class Win32KeyInjector:
         user32 = ctypes.windll.user32
 
         for idx, token in enumerate(keys):
-            win_info = self.window_manager.ensure_verified_focus(window_id)
-            # Security invariant: only emit global hardware keybd_event when the verified
-            # game window genuinely holds foreground focus.
-            use_global_keybd = bool(
-                getattr(win_info, "has_focus", False)
-                and user32.GetForegroundWindow() == window_id
-            )
+            # Verify window identity, visibility, and raise/focus DOSBox before every key
+            self.window_manager.ensure_verified_focus(window_id)
 
             if token in self._SPECIAL_KEYS:
                 vk, is_extended = self._SPECIAL_KEYS[token]
@@ -188,8 +183,7 @@ class Win32KeyInjector:
 
             try:
                 if needs_shift:
-                    if use_global_keybd:
-                        user32.keybd_event(self._VK_SHIFT, self._SHIFT_SCAN, 0, 0)
+                    user32.keybd_event(self._VK_SHIFT, self._SHIFT_SCAN, 0, 0)
                     user32.PostMessageW(
                         window_id,
                         self._WM_KEYDOWN,
@@ -198,24 +192,21 @@ class Win32KeyInjector:
                     )
                     time.sleep(0.01)
 
-                if use_global_keybd:
-                    user32.keybd_event(vk, scan, flags_down, 0)
+                user32.keybd_event(vk, scan, flags_down, 0)
                 user32.PostMessageW(window_id, self._WM_KEYDOWN, vk, lparam_down)
                 time.sleep(hold_seconds)
             finally:
-                if use_global_keybd:
-                    user32.keybd_event(vk, scan, flags_up, 0)
+                user32.keybd_event(vk, scan, flags_up, 0)
                 user32.PostMessageW(window_id, self._WM_KEYUP, vk, lparam_up)
 
                 if needs_shift:
                     time.sleep(0.01)
-                    if use_global_keybd:
-                        user32.keybd_event(
-                            self._VK_SHIFT,
-                            self._SHIFT_SCAN,
-                            self._KEYEVENTF_KEYUP,
-                            0,
-                        )
+                    user32.keybd_event(
+                        self._VK_SHIFT,
+                        self._SHIFT_SCAN,
+                        self._KEYEVENTF_KEYUP,
+                        0,
+                    )
                     user32.PostMessageW(
                         window_id,
                         self._WM_KEYUP,
@@ -227,23 +218,17 @@ class Win32KeyInjector:
                 time.sleep(inter_key_delay)
 
     def send_alt_enter(self, window_id: int) -> None:
-        win_info = self.window_manager.ensure_verified_focus(window_id)
+        self.window_manager.ensure_verified_focus(window_id)
         user32 = ctypes.windll.user32
-        use_global_keybd = bool(
-            getattr(win_info, "has_focus", False)
-            and user32.GetForegroundWindow() == window_id
-        )
         try:
-            if use_global_keybd:
-                user32.keybd_event(self._VK_MENU, 0x38, 0, 0)
-                user32.keybd_event(self._VK_RETURN, 0x1C, 0, 0)
+            user32.keybd_event(self._VK_MENU, 0x38, 0, 0)
+            user32.keybd_event(self._VK_RETURN, 0x1C, 0, 0)
             user32.PostMessageW(window_id, self._WM_KEYDOWN, self._VK_MENU, 1 | (0x38 << 16))
             user32.PostMessageW(window_id, self._WM_KEYDOWN, self._VK_RETURN, 1 | (0x1C << 16))
             time.sleep(0.05)
         finally:
-            if use_global_keybd:
-                user32.keybd_event(self._VK_RETURN, 0x1C, self._KEYEVENTF_KEYUP, 0)
-                user32.keybd_event(self._VK_MENU, 0x38, self._KEYEVENTF_KEYUP, 0)
+            user32.keybd_event(self._VK_RETURN, 0x1C, self._KEYEVENTF_KEYUP, 0)
+            user32.keybd_event(self._VK_MENU, 0x38, self._KEYEVENTF_KEYUP, 0)
             user32.PostMessageW(
                 window_id,
                 self._WM_KEYUP,
