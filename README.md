@@ -5,7 +5,7 @@
 
 ![Le Chonk Live Gameplay Showcase](assets/demo.gif)
 
-> **Video Showcase**: [Watch / Download `assets/showcase_le_chonk.mp4`](assets/showcase_le_chonk.mp4) — 50-turn live autonomous run powered by `mistral-large-4` on Steam Epyx Rogue v1.49 (`App ID 1443430`), reaching **Dungeon Level 3**, defeating **3 monsters** (including an Ice Monster & Hobgoblin in melee), leveling up to **Guild Novice**, and collecting **91 gold pieces** with **0% invalid actions**.
+> **Video Showcase**: [Watch / Download `assets/showcase_le_chonk.mp4`](assets/showcase_le_chonk.mp4) — 30-turn live autonomous run powered by `mistral-large-4` on Steam Epyx Rogue v1.49 (`App ID 1443430`), exploring **4 interconnected rooms and 3 corridors**, discovering and retrieving scrolls and gold, defeating monsters in tactical melee, and searching dead-ends for hidden secret doors with **0% invalid actions** (100% valid schema decisions).
 
 ---
 
@@ -144,7 +144,7 @@ uv run rogue-agent --doctor
 uv run rogue-agent --backend steam --dry-run --max-turns 20
 
 # 3. Steam Backend — Live Autonomous Mistral Large 4 Gameplay
-uv run rogue-agent --backend steam --max-turns 50 --max-budget-usd 0.50
+uv run rogue-agent --backend steam --max-turns 30 --max-budget-usd 0.80 --request-timeout 60
 
 # 4. Terminal Backend — Dry-Run (0 API cost, verifies 80x24 PTY + pyte + action loop on Linux/WSL)
 uv run rogue-agent --backend terminal --dry-run --max-turns 20
