@@ -192,7 +192,7 @@ class MistralGameplayAgent:
                     messages=messages,
                     response_format=MistralActionDecision,
                     temperature=0.2,
-                    max_tokens=1024,
+                    max_tokens=4096,
                     reasoning_effort="low",
                     timeout_ms=timeout_ms,
                 )
@@ -202,7 +202,7 @@ class MistralGameplayAgent:
                     messages=messages,
                     response_format=MistralActionDecision,
                     temperature=0.2,
-                    max_tokens=1024,
+                    max_tokens=4096,
                     timeout_ms=timeout_ms,
                 )
 
@@ -227,13 +227,12 @@ class MistralGameplayAgent:
 
         try:
             choice = response.choices[0]
-            parsed: MistralActionDecision | None = getattr(choice.message, "parsed", None)
+            parsed = self._extract_parsed_decision(choice.message)
             if parsed is None:
-                raw_content = choice.message.content
-                if isinstance(raw_content, str):
-                    parsed = MistralActionDecision.model_validate(json.loads(raw_content))
-            if parsed is None:
-                raise ValueError("Empty parsed decision from Mistral API response")
+                finish_reason = getattr(choice, "finish_reason", "unknown")
+                raise ValueError(
+                    f"Empty parsed decision from Mistral API response (finish_reason={finish_reason})"
+                )
             action = parsed.to_game_action(observation)
             return self._apply_anti_oscillation_guard(action, observation, memory_summary)
         except Exception as exc:
@@ -243,6 +242,42 @@ class MistralGameplayAgent:
                 reason=f"Schema fallback ({exc})",
                 player_name=self.settings.player_name,
             )
+
+    @staticmethod
+    def _extract_parsed_decision(message: Any) -> MistralActionDecision | None:
+        """Extract MistralActionDecision from SDK message, handling ThinkChunk lists."""
+        parsed: MistralActionDecision | None = getattr(message, "parsed", None)
+        if parsed is not None:
+            return parsed
+
+        raw_content = getattr(message, "content", None)
+        text_payload = ""
+        if isinstance(raw_content, str):
+            text_payload = raw_content.strip()
+        elif isinstance(raw_content, list):
+            text_parts: list[str] = []
+            for chunk in raw_content:
+                chunk_type = getattr(chunk, "type", None) or (
+                    chunk.get("type") if isinstance(chunk, dict) else None
+                )
+                if chunk_type == "thinking":
+                    continue
+                chunk_text = getattr(chunk, "text", None) or (
+                    chunk.get("text") if isinstance(chunk, dict) else None
+                )
+                if isinstance(chunk_text, str) and chunk_text.strip():
+                    text_parts.append(chunk_text.strip())
+            text_payload = "\n".join(text_parts).strip()
+
+        if not text_payload:
+            return None
+
+        if text_payload.startswith("```"):
+            lines = text_payload.splitlines()
+            if len(lines) >= 3:
+                text_payload = "\n".join(lines[1:-1]).strip()
+
+        return MistralActionDecision.model_validate(json.loads(text_payload))
 
     def get_usage_stats(self) -> dict[str, Any]:
         stats = self.guard.get_stats()

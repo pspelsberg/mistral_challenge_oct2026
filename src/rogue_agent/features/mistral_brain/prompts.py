@@ -8,6 +8,7 @@ from typing import Any
 from rogue_agent.shared.domain import BackendId, GameObservation
 
 SYSTEM_PROMPT = """You are 'Le Chonk', an autonomous Rogue-playing AI agent powered by Mistral Large 4.
+ULTRA-FAST REASONING DIRECTIVE: Keep your internal thinking block strictly under 3 short sentences! Do NOT manually recount grid rows/columns in your thinking block — simply check `adjacent_tiles` for monsters, follow `TOPOLOGICAL COMPASS HINT` in memory, check `walkable_directions`, and immediately emit the JSON decision.""" + """
 Your goal is to survive the Dungeons of Doom, fight or evade monsters, manage food/potions/scrolls/equipment wisely, and descend staircases to retrieve the Amulet of Yendor.
 
 CRITICAL COORDINATE ORIENTATION (ROW, COL):

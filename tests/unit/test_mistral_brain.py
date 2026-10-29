@@ -304,3 +304,25 @@ def test_anti_oscillation_guard_does_not_override_non_forbidden_move() -> None:
     action = agent.decide_action(obs, mem_summary, "Explore")
     assert action.direction == Direction.WEST
     assert "Anti-Oscillation Guard" not in action.decision_summary
+
+
+@pytest.mark.unit
+def test_extract_parsed_decision_from_think_and_text_chunks() -> None:
+    """Verify MistralGameplayAgent extracts JSON when content is a list of [ThinkChunk, TextChunk]."""
+    json_payload = (
+        '{"observed_state":"PLAYING","current_objective":"Exit door",'
+        '"action":"move","direction":"west","steps":2,'
+        '"decision_summary":"Step west toward unvisited door","confidence":0.95}'
+    )
+    fake_message = SimpleNamespace(
+        parsed=None,
+        content=[
+            SimpleNamespace(type="thinking", thinking=[SimpleNamespace(type="text", text="Thinking...")]),
+            SimpleNamespace(type="text", text=json_payload),
+        ],
+    )
+    decision = MistralGameplayAgent._extract_parsed_decision(fake_message)
+    assert decision is not None
+    assert decision.action == ActionType.MOVE
+    assert decision.direction == Direction.WEST
+    assert decision.steps == 2
