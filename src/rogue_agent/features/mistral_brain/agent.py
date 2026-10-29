@@ -192,8 +192,8 @@ class MistralGameplayAgent:
                     messages=messages,
                     response_format=MistralActionDecision,
                     temperature=0.2,
-                    max_tokens=250,
-                    reasoning_effort="none",
+                    max_tokens=1024,
+                    reasoning_effort="low",
                     timeout_ms=timeout_ms,
                 )
             except TypeError:
@@ -202,7 +202,7 @@ class MistralGameplayAgent:
                     messages=messages,
                     response_format=MistralActionDecision,
                     temperature=0.2,
-                    max_tokens=250,
+                    max_tokens=1024,
                     timeout_ms=timeout_ms,
                 )
 
