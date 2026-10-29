@@ -38,7 +38,7 @@ class RogueAgentSettings(BaseSettings):
         default=1.00, gt=0.0, le=100.0, validation_alias="ROGUE_MAX_BUDGET_USD"
     )
     request_timeout_seconds: float = Field(
-        default=30.0, gt=1.0, le=180.0, validation_alias="ROGUE_REQUEST_TIMEOUT_SECONDS"
+        default=60.0, gt=1.0, le=180.0, validation_alias="ROGUE_REQUEST_TIMEOUT_SECONDS"
     )
     max_retries: int = Field(default=3, ge=0, le=10, validation_alias="ROGUE_MAX_RETRIES")
     menu_wait_seconds: float = Field(

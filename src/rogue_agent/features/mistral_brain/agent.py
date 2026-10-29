@@ -212,10 +212,10 @@ class MistralGameplayAgent:
         except Exception as exc:
             self.invalid_responses += 1
             exc_str = str(exc)
-            if any(term in exc_str for term in ("delimiter", "JSON", "Expecting", "Unterminated")):
+            if any(term in exc_str for term in ("delimiter", "JSON", "Expecting", "Unterminated", "timed out", "timeout")):
                 return safe_fallback_action(
                     observation,
-                    reason=f"LLM output JSON format error ({exc})",
+                    reason=f"LLM API format or timeout error ({exc})",
                     player_name=self.settings.player_name,
                 )
             raise RuntimeError(f"Mistral Large 4 API request failed: {exc}") from exc

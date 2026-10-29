@@ -65,6 +65,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Override maximum estimated API budget in USD.",
     )
     parser.add_argument(
+        "--request-timeout",
+        type=float,
+        default=None,
+        help="Override HTTP request timeout in seconds for Mistral API calls (default: 60s).",
+    )
+    parser.add_argument(
         "--doctor",
         action="store_true",
         help="Run environment discovery and print readiness report.",
@@ -115,6 +121,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings.max_api_calls = max(1, args.max_api_calls)
     if args.max_budget_usd is not None:
         settings.max_budget_usd = max(0.001, args.max_budget_usd)
+    if args.request_timeout is not None:
+        settings.request_timeout_seconds = max(5.0, min(180.0, args.request_timeout))
     if args.always_send_screenshot:
         settings.steam_screenshot_backup_only = False
 
