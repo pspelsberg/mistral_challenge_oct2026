@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import heapq
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -123,40 +124,66 @@ class BoundedAgentMemory:
             "E": (0, 1),
             "W": (0, -1),
         }
+        diag_deltas = {
+            "NE": (-1, 1),
+            "NW": (-1, -1),
+            "SE": (1, 1),
+            "SW": (1, -1),
+        }
 
-        queue: deque[tuple[int, int, int, str]] = deque()
+        pq: list[tuple[int, int, int, int, str]] = []
+        dist_map: dict[tuple[int, int], int] = {}
         allowed_initial = set(walkable_dirs) if walkable_dirs else set(DIRECTION_DELTAS_BY_CODE.keys())
         start_ch = _tile(pr, pc)
 
-        for d_code, (dr, dc) in DIRECTION_DELTAS_BY_CODE.items():
+        # Initial cardinal neighbors (cost 10)
+        for d_code, (dr, dc) in cardinal_deltas.items():
             if walkable_dirs and d_code not in allowed_initial:
                 continue
             nr, nc = pr + dr, pc + dc
             n_ch = _tile(nr, nc)
             if not _is_walkable_tile(n_ch):
                 continue
-            if d_code not in cardinal_deltas and (
-                start_ch in ("+", "#") or n_ch in ("+", "#")
-            ):
-                continue
+            dist_map[(nr, nc)] = 10
             routes[(nr, nc)] = (1, d_code)
-            queue.append((nr, nc, 1, d_code))
+            heapq.heappush(pq, (10, 1, nr, nc, d_code))
 
-        while queue:
-            cr, cc, dist, first_dir = queue.popleft()
+        # Initial diagonal neighbors (cost 21: strictly disfavored compared to cardinal, disallow doorway entries)
+        for d_code, (dr, dc) in diag_deltas.items():
+            if walkable_dirs and d_code not in allowed_initial:
+                continue
+            nr, nc = pr + dr, pc + dc
+            n_ch = _tile(nr, nc)
+            if not _is_walkable_tile(n_ch):
+                continue
+            if start_ch in ("+", "#") or n_ch in ("+", "#"):
+                continue
+            dist_map[(nr, nc)] = 21
+            routes[(nr, nc)] = (1, d_code)
+            heapq.heappush(pq, (21, 1, nr, nc, d_code))
+
+        while pq:
+            cost, steps, cr, cc, first_dir = heapq.heappop(pq)
+            if cost > dist_map.get((cr, cc), cost):
+                continue
             c_ch = _tile(cr, cc)
-            cand_map = cardinal_deltas if c_ch in ("+", "#") else DIRECTION_DELTAS_BY_CODE
+            cand_map = cardinal_deltas if c_ch in ("+", "#") else {**cardinal_deltas, **diag_deltas}
             for d_code, (dr, dc) in cand_map.items():
                 nr, nc = cr + dr, cc + dc
-                if (nr, nc) in routes or (nr, nc) == (pr, pc):
+                if (nr, nc) == (pr, pc):
                     continue
                 n_ch = _tile(nr, nc)
                 if not _is_walkable_tile(n_ch):
                     continue
                 if d_code not in cardinal_deltas and n_ch in ("+", "#"):
                     continue
-                routes[(nr, nc)] = (dist + 1, first_dir)
-                queue.append((nr, nc, dist + 1, first_dir))
+                w = 10 if d_code in cardinal_deltas else 21
+                new_cost = cost + w
+                new_steps = steps + 1
+                if (nr, nc) not in dist_map or new_cost < dist_map[(nr, nc)]:
+                    dist_map[(nr, nc)] = new_cost
+                    routes[(nr, nc)] = (new_steps, first_dir)
+                    heapq.heappush(pq, (new_cost, new_steps, nr, nc, first_dir))
 
         return routes
 

@@ -1,7 +1,7 @@
 {
   "rogue_version": "epyx-1.49",
-  "updated_at": "2026-10-29T17:45:43.977608+00:00",
-  "sessions_analyzed": 25,
+  "updated_at": "2026-10-29T17:51:19.502308+00:00",
+  "sessions_analyzed": 26,
   "processed_session_ids": [
     "20261026_124216_977140_steam_epyx-1.49_live",
     "20261026_124703_556099_steam_epyx-1.49_live",
@@ -27,9 +27,10 @@
     "20261029_163535_951738_steam_epyx-1.49_live",
     "20261029_163626_687510_steam_epyx-1.49_live",
     "20261029_172851_183261_steam_epyx-1.49_live",
-    "20261029_174403_199010_steam_epyx-1.49_live"
+    "20261029_174403_199010_steam_epyx-1.49_live",
+    "20261029_174913_925284_steam_epyx-1.49_live"
   ],
-  "total_turns_logged": 730,
+  "total_turns_logged": 737,
   "total_monsters_defeated": 7,
   "max_depth_ever": 3,
   "max_gold_ever": 91,
@@ -75,18 +76,6 @@
     "FRONTIER DISCIPLINE RULE: Search dead-end '#' corridors once (steps=5), skip cleared rooms (0 items, 0 stairs, 0 unvisited doors), and prioritize UNEXPLORED '#' corridor branches."
   ],
   "recent_post_mortems": [
-    {
-      "session_id": "20261026_151227_315828_steam_epyx-1.49_live",
-      "rogue_version": "epyx-1.49",
-      "turns_survived": 40,
-      "max_depth": 1,
-      "rooms_discovered": 5,
-      "gold_collected": 19,
-      "monsters_defeated": 0,
-      "final_state": "PLAYING",
-      "termination_reason": "limit_reached:Reached maximum configured turns (40).",
-      "distilled_lesson": "Reached depth 1, explored 5 room(s), collected 19 gold, defeated 0 monster(s) (PLAYING)."
-    },
     {
       "session_id": "20261026_152348_272160_steam_epyx-1.49_live",
       "rogue_version": "epyx-1.49",
@@ -218,6 +207,18 @@
       "final_state": "PLAYING",
       "termination_reason": "paused_on_runtime_error:Mistral Large 4 API request failed: The read operation timed out",
       "distilled_lesson": "Reached depth 1, explored 2 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING)."
+    },
+    {
+      "session_id": "20261029_174913_925284_steam_epyx-1.49_live",
+      "rogue_version": "epyx-1.49",
+      "turns_survived": 7,
+      "max_depth": 1,
+      "rooms_discovered": 1,
+      "gold_collected": 0,
+      "monsters_defeated": 0,
+      "final_state": "PLAYING",
+      "termination_reason": "emergency_stop_keyboard_interrupt",
+      "distilled_lesson": "Reached depth 1, explored 1 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING)."
     }
   ]
 }

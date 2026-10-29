@@ -102,10 +102,14 @@ class MistralGameplayAgent:
         observation: GameObservation,
         memory_summary: str,
     ) -> GameAction:
-        """Redirect movement only if the model chose a forbidden reverse or unwalkable move during oscillation."""
+        """Redirect movement if the model chose a forbidden reverse move or an unwalkable/wall move."""
         if action.action_type not in (ActionType.MOVE, ActionType.FAST_MOVE) or not action.direction:
             return action
 
+        walkable_dirs = [
+            str(d).upper()
+            for d in (observation.inferred_metadata.get("walkable_directions") or [])
+        ]
         has_oscillation_alert = any(
             marker in memory_summary
             for marker in (
@@ -114,14 +118,7 @@ class MistralGameplayAgent:
                 "FORBIDDEN OSCILLATION DIRECTION",
             )
         )
-        if not has_oscillation_alert:
-            return action
-
-        walkable_dirs = [
-            str(d).upper()
-            for d in (observation.inferred_metadata.get("walkable_directions") or [])
-        ]
-        forbidden_dir = cls._parse_forbidden_direction(memory_summary)
+        forbidden_dir = cls._parse_forbidden_direction(memory_summary) if has_oscillation_alert else None
         is_forbidden = bool(forbidden_dir and action.direction == forbidden_dir)
         is_unwalkable = bool(walkable_dirs and not action.direction.matches_walkable(walkable_dirs))
 
