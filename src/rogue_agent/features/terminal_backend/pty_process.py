@@ -3,18 +3,26 @@
 from __future__ import annotations
 
 import errno
-import fcntl
 import os
-import pty
 import select
 import signal
 import struct
 import subprocess
-import termios
 import time
 from pathlib import Path
 
+try:
+    import fcntl
+    import pty
+    import termios
+except ImportError:
+    fcntl = None  # type: ignore
+    pty = None  # type: ignore
+    termios = None  # type: ignore
+
 import pyte
+
+from rogue_agent.shared.controls.base import SAFE_NAME_PATTERN
 
 
 class PtyRogueProcess:
@@ -30,7 +38,8 @@ class PtyRogueProcess:
         self.binary_path = binary_path
         self.cols = cols
         self.rows = rows
-        self.player_name = player_name
+        clean_name = player_name.strip()
+        self.player_name = clean_name if SAFE_NAME_PATTERN.match(clean_name) else "LeChonk"
 
         self.screen = pyte.Screen(cols, rows)
         self.stream = pyte.ByteStream(self.screen)
@@ -46,6 +55,11 @@ class PtyRogueProcess:
     def start(self, settle_timeout: float = 0.6) -> None:
         """Spawn the terminal Rogue binary inside a newly allocated 80x24 PTY."""
         self.close()
+        if pty is None or fcntl is None:
+            raise RuntimeError(
+                "Terminal Rogue backend requires a POSIX environment (Linux/macOS/WSL). "
+                "On Windows, please run the Steam backend: --backend steam."
+            )
         if not self.binary_path.is_file():
             raise FileNotFoundError(
                 f"Terminal Rogue binary not found at {self.binary_path}. "
@@ -64,17 +78,19 @@ class PtyRogueProcess:
         env["ROGUEOPTS"] = f"name={self.player_name},Nopassgo"
 
         self.screen.reset()
-        self._proc = subprocess.Popen(
-            [str(self.binary_path.resolve())],
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            env=env,
-            cwd=str(self.binary_path.resolve().parent),
-            close_fds=True,
-            start_new_session=True,
-        )
-        os.close(slave_fd)
+        try:
+            self._proc = subprocess.Popen(
+                [str(self.binary_path.resolve())],
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                env=env,
+                cwd=str(self.binary_path.resolve().parent),
+                close_fds=True,
+                start_new_session=True,
+            )
+        finally:
+            os.close(slave_fd)
 
         flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
         fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
@@ -92,7 +108,11 @@ class PtyRogueProcess:
         received_any = False
 
         while time.monotonic() < deadline:
-            timeout = quiet_window if received_any else min(0.1, max(0.01, deadline - time.monotonic()))
+            timeout = (
+                quiet_window
+                if received_any
+                else min(0.1, max(0.01, deadline - time.monotonic()))
+            )
             ready, _, _ = select.select([self._master_fd], [], [], timeout)
             if not ready:
                 if received_any:

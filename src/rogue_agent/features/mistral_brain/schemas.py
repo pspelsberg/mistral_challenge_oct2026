@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from rogue_agent.shared.domain import (
+    REPEATABLE_HORIZON_ACTIONS,
     ActionType,
     Direction,
     GameAction,
@@ -12,18 +13,39 @@ from rogue_agent.shared.domain import (
     GameState,
 )
 
-_REPEATABLE_HORIZON_ACTIONS = {
-    ActionType.MOVE,
-    ActionType.SEARCH,
-    ActionType.REST,
-}
+_DIRECTIONAL_ACTIONS: frozenset[ActionType] = frozenset(
+    {
+        ActionType.MOVE,
+        ActionType.FAST_MOVE,
+        ActionType.THROW_ITEM,
+        ActionType.ZAP_WAND,
+    }
+)
 
-_DIAGONAL_COMPONENTS: dict[Direction, tuple[Direction, Direction]] = {
-    Direction.NORTHEAST: (Direction.NORTH, Direction.EAST),
-    Direction.NORTHWEST: (Direction.NORTH, Direction.WEST),
-    Direction.SOUTHEAST: (Direction.SOUTH, Direction.EAST),
-    Direction.SOUTHWEST: (Direction.SOUTH, Direction.WEST),
-}
+_ITEM_ACTIONS: frozenset[ActionType] = frozenset(
+    {
+        ActionType.QUAFF_POTION,
+        ActionType.READ_SCROLL,
+        ActionType.EAT_FOOD,
+        ActionType.WIELD_WEAPON,
+        ActionType.WEAR_ARMOR,
+        ActionType.PUT_ON_RING,
+        ActionType.DROP_ITEM,
+        ActionType.THROW_ITEM,
+        ActionType.ZAP_WAND,
+    }
+)
+
+_DIRECTION_PRIORITY: tuple[Direction, ...] = (
+    Direction.EAST,
+    Direction.SOUTH,
+    Direction.WEST,
+    Direction.NORTH,
+    Direction.NORTHEAST,
+    Direction.NORTHWEST,
+    Direction.SOUTHEAST,
+    Direction.SOUTHWEST,
+)
 
 
 class MistralActionDecision(BaseModel):
@@ -83,31 +105,13 @@ class MistralActionDecision(BaseModel):
 
     def to_game_action(self, fallback_observation: GameObservation) -> GameAction:
         """Convert to a domain GameAction, repairing missing direction/item parameters safely."""
-        directional_actions = {
-            ActionType.MOVE,
-            ActionType.FAST_MOVE,
-            ActionType.THROW_ITEM,
-            ActionType.ZAP_WAND,
-        }
-        item_actions = {
-            ActionType.QUAFF_POTION,
-            ActionType.READ_SCROLL,
-            ActionType.EAT_FOOD,
-            ActionType.WIELD_WEAPON,
-            ActionType.WEAR_ARMOR,
-            ActionType.PUT_ON_RING,
-            ActionType.DROP_ITEM,
-            ActionType.THROW_ITEM,
-            ActionType.ZAP_WAND,
-        }
-
-        if self.action in directional_actions and self.direction is None:
+        if self.action in _DIRECTIONAL_ACTIONS and self.direction is None:
             return safe_fallback_action(
                 fallback_observation,
                 reason=f"Model returned '{self.action.value}' without a direction",
             )
 
-        if self.action in item_actions and (not self.item_key or not self.item_key.isalpha()):
+        if self.action in _ITEM_ACTIONS and (not self.item_key or not self.item_key.isalpha()):
             return safe_fallback_action(
                 fallback_observation,
                 reason=f"Model returned '{self.action.value}' without a valid item_key",
@@ -120,25 +124,21 @@ class MistralActionDecision(BaseModel):
             and effective_direction is not None
         ):
             walkable = fallback_observation.inferred_metadata.get("walkable_directions")
-            if isinstance(walkable, list) and walkable and effective_direction.value not in walkable:
+            if (
+                isinstance(walkable, list)
+                and walkable
+                and not effective_direction.matches_walkable(walkable)
+            ):
                 replacement: Direction | None = None
-                if effective_direction in _DIAGONAL_COMPONENTS:
-                    for comp in _DIAGONAL_COMPONENTS[effective_direction]:
-                        if comp.value in walkable:
+                diag_comps = effective_direction.diagonal_components
+                if diag_comps is not None:
+                    for comp in diag_comps:
+                        if comp.matches_walkable(walkable):
                             replacement = comp
                             break
                 if replacement is None:
-                    for cand in (
-                        Direction.EAST,
-                        Direction.SOUTH,
-                        Direction.WEST,
-                        Direction.NORTH,
-                        Direction.NORTHEAST,
-                        Direction.NORTHWEST,
-                        Direction.SOUTHEAST,
-                        Direction.SOUTHWEST,
-                    ):
-                        if cand.value in walkable:
+                    for cand in _DIRECTION_PRIORITY:
+                        if cand.matches_walkable(walkable):
                             replacement = cand
                             break
                 if replacement is not None:
@@ -148,7 +148,7 @@ class MistralActionDecision(BaseModel):
                     )[:300]
                     effective_direction = replacement
 
-        effective_steps = self.steps if self.action in _REPEATABLE_HORIZON_ACTIONS else 1
+        effective_steps = self.steps if self.action in REPEATABLE_HORIZON_ACTIONS else 1
 
         return GameAction(
             action_type=self.action,
@@ -163,7 +163,11 @@ class MistralActionDecision(BaseModel):
         )
 
 
-def safe_fallback_action(observation: GameObservation, reason: str = "Fallback") -> GameAction:
+def safe_fallback_action(
+    observation: GameObservation,
+    reason: str = "Fallback",
+    player_name: str = "LeChonk",
+) -> GameAction:
     """Documented safe fallback when the model returns an invalid or incomplete action."""
     if observation.game_state in (
         GameState.MORE_PROMPT,
@@ -180,8 +184,8 @@ def safe_fallback_action(observation: GameObservation, reason: str = "Fallback")
     if observation.game_state == GameState.CHARACTER_NAME_ENTRY:
         return GameAction(
             action_type=ActionType.ENTER_NAME,
-            text_input="LeChonk",
-            decision_summary=f"[{reason}] Enter character name LeChonk",
+            text_input=player_name,
+            decision_summary=f"[{reason}] Enter character name {player_name}",
             objective="Start game",
             confidence=0.8,
         )
@@ -197,7 +201,7 @@ def safe_fallback_action(observation: GameObservation, reason: str = "Fallback")
     walkable = observation.inferred_metadata.get("walkable_directions")
     if isinstance(walkable, list) and walkable:
         for cand in (Direction.EAST, Direction.SOUTH, Direction.WEST, Direction.NORTH):
-            if cand.value in walkable:
+            if cand.matches_walkable(walkable):
                 return GameAction(
                     action_type=ActionType.MOVE,
                     direction=cand,

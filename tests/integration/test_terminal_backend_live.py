@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from rogue_agent.features.terminal_backend.adapter import TerminalGameAdapter
@@ -10,6 +12,7 @@ from rogue_agent.shared.domain import ActionType, Direction, GameAction, GameSta
 
 
 @pytest.mark.integration
+@pytest.mark.skipif(sys.platform == "win32", reason="Terminal Rogue POSIX PTY backend requires Linux / WSL")
 def test_terminal_rogue_live_pty_mvp() -> None:
     """Milestone 2 MVP: Start real Rogue 5.4.4 in PTY, observe map, execute actions, re-observe."""
     settings = RogueAgentSettings()

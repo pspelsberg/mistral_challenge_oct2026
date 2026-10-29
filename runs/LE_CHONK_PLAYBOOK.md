@@ -1,28 +1,40 @@
 # Le Chonk's Recursive Dungeon Playbook
 
 - **Target Rogue Version**: `epyx-1.49`
-- **Sessions Analyzed**: `3`
-- **Total Turns Logged**: `68`
-- **Total Monsters Defeated**: `0`
-- **Max Dungeon Depth Reached**: `Level 1`
-- **Max Gold Collected in a Run**: `0`
-- **Last Updated (UTC)**: `2026-10-21T15:06:51.207939+00:00`
+- **Sessions Analyzed**: `21`
+- **Total Turns Logged**: `691`
+- **Total Monsters Defeated**: `7`
+- **Max Dungeon Depth Reached**: `Level 3`
+- **Max Gold Collected in a Run**: `91`
+- **Last Updated (UTC)**: `2026-10-29T16:20:57.634760+00:00`
 
 > **Epistemic Hygiene Rule**: Seed-randomized properties (map coordinates, unidentified potion colors, and scroll titles) are strictly excluded from cross-session memory. Only version-invariant combat telemetry and tactical post-mortems are persisted.
 
 ## 1. Distilled Cross-Session Tactical Rules
 
-_No tactical rules distilled yet._
+1. FRONTIER DISCIPLINE RULE: Search dead-end '#' corridors once (steps=5), skip cleared rooms (0 items, 0 stairs, 0 unvisited doors), and prioritize UNEXPLORED '#' corridor branches.
 
 ## 2. Empirical Monster Bestiary (Learned from Live Combat)
 
 | Symbol | Monster | Combat Turns | Player Hits / Kills | Monster Hits / Deaths Caused | Max Single-Turn Damage | Tactical Rule |
 | :---: | :--- | :---: | :---: | :---: | :---: | :--- |
+| `B` | **Bat** | 0 | 2 / **3** | 0 / **0** | 0 HP | Erratic fast flier: do not chase across open rooms; attack when adjacent. |
+| `H` | **Hobgoblin** | 5 | 0 / **2** | 3 / **0** | 0 HP | Heavy Level-1 melee hitter (1d8 damage, deals up to 6-8 HP/hit; ~35% hero hit chance). At <= 6-7 HP without healing, trading melee swings is high-risk for one-shot death. Normal 1x speed: retreating into corridors or toward stairs does NOT give free hits (unlike 2x flyers). |
+| `I` | **Ice Monster** | 1 | 2 / **0** | 1 / **0** | 0 HP | Freeze gaze skips your turns: avoid engaging at low HP. |
 
 ## 3. Session Post-Mortem Log
 
 | Session ID | Turns | Max Depth | Rooms | Gold | Kills | Outcome | Post-Mortem Lesson |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| `20261021_090137_395695_steam_epyx-1.49_live` | 14 | 1 | 2 | 0 | 0 | `PLAYING` | Reached depth 1, explored 2 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING). |
-| `20261021_093922_869551_steam_epyx-1.49_live` | 4 | 1 | 1 | 0 | 0 | `UNKNOWN` | Reached depth 1, explored 1 room(s), collected 0 gold, defeated 0 monster(s) (UNKNOWN). |
-| `20261021_150258_956389_steam_epyx-1.49_live` | 50 | 1 | 5 | 0 | 0 | `PLAYING` | Reached depth 1, explored 5 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING). |
+| `20261026_140820_137213_steam_epyx-1.49_live` | 30 | 1 | 2 | 0 | 0 | `PLAYING` | Reached depth 1, explored 2 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING). |
+| `20261026_143841_380695_steam_epyx-1.49_live` | 40 | 1 | 2 | 0 | 0 | `PLAYING` | Reached depth 1, explored 2 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING). |
+| `20261026_144638_260659_steam_epyx-1.49_live` | 100 | 1 | 3 | 0 | 2 | `PLAYING` | Reached depth 1, explored 3 room(s), collected 0 gold, defeated 2 monster(s) (PLAYING). |
+| `20261026_150357_952850_steam_epyx-1.49_live` | 40 | 1 | 4 | 0 | 1 | `PLAYING` | Reached depth 1, explored 4 room(s), collected 0 gold, defeated 1 monster(s) (PLAYING). |
+| `20261026_151227_315828_steam_epyx-1.49_live` | 40 | 1 | 5 | 19 | 0 | `PLAYING` | Reached depth 1, explored 5 room(s), collected 19 gold, defeated 0 monster(s) (PLAYING). |
+| `20261026_152348_272160_steam_epyx-1.49_live` | 40 | 1 | 1 | 0 | 0 | `PLAYING` | Reached depth 1, explored 1 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING). |
+| `20261026_153153_709966_steam_epyx-1.49_live` | 10 | 1 | 2 | 0 | 0 | `PLAYING` | Reached depth 1, explored 2 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING). |
+| `20261026_154157_447938_steam_epyx-1.49_live` | 26 | 1 | 2 | 0 | 0 | `PLAYING` | Reached depth 1, explored 2 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING). |
+| `20261026_160450_439895_steam_epyx-1.49_live` | 40 | 1 | 3 | 0 | 0 | `PLAYING` | Reached depth 1, explored 3 room(s), collected 0 gold, defeated 0 monster(s) (PLAYING). |
+| `20261026_161044_541327_steam_epyx-1.49_live` | 40 | 1 | 6 | 0 | 1 | `PLAYING` | Survived 40 turns, reached Level 1, discovered 6 rooms, defeated 1 monster(s), and collected 0 gold. |
+| `20261026_173323_259960_steam_epyx-1.49_live` | 30 | 1 | 4 | 32 | 0 | `PLAYING` | Reached depth 1, explored 4 room(s), collected 32 gold, defeated 0 monster(s) (PLAYING). |
+| `20261029_125607_805886_steam_epyx-1.49_live` | 50 | 3 | 5 | 91 | 3 | `PLAYING` | Survived 50 turns, reached Level 3, discovered 5 rooms, defeated 3 monster(s), and collected 91 gold. |

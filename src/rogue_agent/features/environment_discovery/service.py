@@ -20,7 +20,11 @@ def discover_environment(settings: RogueAgentSettings | None = None) -> Environm
     session_type = os.environ.get("XDG_SESSION_TYPE", "unknown")
     x11_disp = os.environ.get("DISPLAY")
 
-    steam_bin = shutil.which("steam")
+    steam_bin = shutil.which("steam") or shutil.which("steam.exe")
+    if steam_bin is None:
+        default_win_steam = Path("C:/Program Files (x86)/Steam/steam.exe")
+        if default_win_steam.is_file():
+            steam_bin = str(default_win_steam)
     steam_installed = steam_bin is not None
 
     steam_dir = cfg.steam_install_dir

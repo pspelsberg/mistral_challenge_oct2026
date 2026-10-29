@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,8 @@ from rogue_agent.shared.domain import (
     GameObservation,
     GameState,
 )
+
+_SAFE_SEGMENT_RE = re.compile(r"[^a-zA-Z0-9._-]")
 
 
 class SessionTelemetryCollector:
@@ -40,6 +43,11 @@ class SessionTelemetryCollector:
         self._observed_doors_by_level: dict[int, set[tuple[int, int]]] = {}
         self._last_death_message: str | None = None
 
+    @staticmethod
+    def _sanitize_segment(value: str, fallback: str = "unknown") -> str:
+        cleaned = _SAFE_SEGMENT_RE.sub("_", value.strip()).strip("._")
+        return cleaned or fallback
+
     def start_session(
         self,
         backend: str,
@@ -47,13 +55,20 @@ class SessionTelemetryCollector:
         model_id: str,
         dry_run: bool = False,
     ) -> str:
-        """Create a dedicated timestamped run directory."""
+        """Create a dedicated timestamped run directory with path-traversal protection."""
         now = datetime.now(UTC)
         ts = now.strftime("%Y%m%d_%H%M%S_%f")
         mode_tag = "dryrun" if dry_run else "live"
-        folder_name = f"{ts}_{backend}_{rogue_version}_{mode_tag}"
+        safe_backend = self._sanitize_segment(backend)
+        safe_version = self._sanitize_segment(rogue_version)
+        folder_name = f"{ts}_{safe_backend}_{safe_version}_{mode_tag}"
 
-        self.session_dir = (self.base_runs_dir / folder_name).resolve()
+        base_resolved = self.base_runs_dir.resolve()
+        candidate_dir = (base_resolved / folder_name).resolve()
+        if not candidate_dir.is_relative_to(base_resolved):
+            raise ValueError(f"Unsafe session directory path: {candidate_dir}")
+
+        self.session_dir = candidate_dir
         self.frames_dir = self.session_dir / "frames"
         self.frames_dir.mkdir(parents=True, exist_ok=True)
         self.turns_file = self.session_dir / "turns.jsonl"
@@ -118,6 +133,9 @@ class SessionTelemetryCollector:
 
         frame_file: str | None = None
         ascii_file: str | None = None
+        if execution_result.intermediate_screenshot_bytes is not None:
+            menu_png_path = self.frames_dir / f"turn_{turn_index:04d}_menu.png"
+            menu_png_path.write_bytes(execution_result.intermediate_screenshot_bytes)
         if observation.screenshot_png_bytes is not None:
             png_path = self.frames_dir / f"turn_{turn_index:04d}.png"
             png_path.write_bytes(observation.screenshot_png_bytes)

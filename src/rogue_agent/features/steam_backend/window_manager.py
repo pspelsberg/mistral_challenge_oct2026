@@ -1,35 +1,52 @@
-"""X11/Xwayland window discovery and focus safety verification for Steam Rogue (Section 6)."""
+"""X11/Xwayland and Win32 window discovery and focus safety verification for Steam Rogue (Section 6)."""
 
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any
 
-from Xlib import X, display, protocol
-from Xlib.error import XError
+if sys.platform == "win32":
+    import ctypes
+    X = None  # type: ignore
+    display = None  # type: ignore
+    protocol = None  # type: ignore
+    XError = Exception  # type: ignore
+else:
+    try:
+        from Xlib import X, display, protocol
+        from Xlib.error import XError
+    except ImportError:
+        X = None  # type: ignore
+        display = None  # type: ignore
+        protocol = None  # type: ignore
+        XError = Exception  # type: ignore
 
 STEAM_ROGUE_APP_ID = 1443430
 
 # Never match IDE, browser, terminal, or window-manager decoration frame windows
-_FORBIDDEN_WM_CLASSES = {
-    "mutter-x11-frames",
-    "code",
-    "antigravity",
-    "vscodium",
-    "cursor",
-    "gnome-terminal",
-    "kgx",
-    "konsole",
-    "alacritty",
-    "kitty",
-    "wezterm",
-    "xterm",
-    "firefox",
-    "chromium",
-    "google-chrome",
-    "brave-browser",
-}
+_FORBIDDEN_WM_CLASSES = frozenset(
+    {
+        "mutter-x11-frames",
+        "code",
+        "antigravity",
+        "vscodium",
+        "cursor",
+        "gnome-terminal",
+        "kgx",
+        "konsole",
+        "alacritty",
+        "kitty",
+        "wezterm",
+        "xterm",
+        "firefox",
+        "chromium",
+        "google-chrome",
+        "brave-browser",
+        "consolewindowclass",
+    }
+)
 
 
 class WindowNotFoundError(RuntimeError):
@@ -42,7 +59,7 @@ class WindowFocusLostError(RuntimeError):
 
 @dataclass(frozen=True)
 class WindowInfo:
-    """Verified geometry and identity of an X11 game window."""
+    """Verified geometry and identity of a game window."""
 
     window_id: int
     title: str
@@ -62,7 +79,7 @@ def is_verified_rogue_window(
     steam_app_id: int | None,
     allow_test_window_tag: str | None = None,
 ) -> bool:
-    """Determine whether an X11 window is genuinely Steam Epyx Rogue / DOSBox."""
+    """Determine whether a window is genuinely Steam Epyx Rogue / DOSBox."""
     if not title and not wm_class:
         return False
 
@@ -77,6 +94,9 @@ def is_verified_rogue_window(
     if "rogue oktober" in lower_title or "antigravity" in lower_title:
         return False
 
+    if "status window" in lower_title:
+        return False
+
     if any("dosbox" in c for c in lower_classes):
         return True
 
@@ -84,14 +104,16 @@ def is_verified_rogue_window(
         return True
 
     if steam_app_id == STEAM_ROGUE_APP_ID and (
-        "dosbox" in lower_title or "rogue" in lower_title or any("steam_app_1443430" in c for c in lower_classes)
+        "dosbox" in lower_title
+        or "rogue" in lower_title
+        or any("steam_app_1443430" in c for c in lower_classes)
     ):
         return True
 
     return False
 
 
-class X11WindowManager:
+class PosixX11WindowManager:
     """Discovers, validates, and manages focus for the Steam Rogue X11/Xwayland window."""
 
     def __init__(
@@ -146,7 +168,9 @@ class X11WindowManager:
             pass
         return ""
 
-    def _inspect_window(self, win: Any, focused_id: int, steam_atom: int, net_wm_name_atom: int) -> WindowInfo | None:
+    def _inspect_window(
+        self, win: Any, focused_id: int, steam_atom: int, net_wm_name_atom: int
+    ) -> WindowInfo | None:
         try:
             attrs = win.get_attributes()
             geom = win.get_geometry()
@@ -336,3 +360,200 @@ class X11WindowManager:
     def get_xlib_window(self, window_id: int) -> Any:
         dpy = self._get_display()
         return dpy.create_resource_object("window", window_id)
+
+
+class _RECT(ctypes.Structure if sys.platform == "win32" else object):  # type: ignore
+    _fields_ = [
+        ("left", ctypes.c_long if sys.platform == "win32" else int),
+        ("top", ctypes.c_long if sys.platform == "win32" else int),
+        ("right", ctypes.c_long if sys.platform == "win32" else int),
+        ("bottom", ctypes.c_long if sys.platform == "win32" else int),
+    ]
+
+
+class _POINT(ctypes.Structure if sys.platform == "win32" else object):  # type: ignore
+    _fields_ = [
+        ("x", ctypes.c_long if sys.platform == "win32" else int),
+        ("y", ctypes.c_long if sys.platform == "win32" else int),
+    ]
+
+
+class Win32WindowManager:
+    """Discovers, validates, and manages focus for the Steam Rogue DOSBox window on Windows."""
+
+    # DESKTOP_READOBJECTS (0x0001) | DESKTOP_SWITCHDESKTOP (0x0100)
+    _DESKTOP_ACCESS_MASK = 0x0101
+
+    def __init__(
+        self,
+        display_name: str | None = None,
+        allow_test_window_tag: str | None = None,
+    ) -> None:
+        self.display_name = display_name
+        self.allow_test_window_tag = allow_test_window_tag
+
+    def close(self) -> None:
+        pass
+
+    def get_xlib_window(self, window_id: int) -> Any:
+        return None
+
+    def _attach_desktop(self) -> None:
+        h_default = 0
+        try:
+            user32 = ctypes.windll.user32
+            h_default = user32.OpenDesktopW("Default", 0, False, self._DESKTOP_ACCESS_MASK)
+            if h_default:
+                user32.SetThreadDesktop(h_default)
+        except Exception:
+            pass
+        finally:
+            if h_default:
+                try:
+                    ctypes.windll.user32.CloseDesktop(h_default)
+                except Exception:
+                    pass
+
+    def find_game_window(self) -> WindowInfo | None:
+        self._attach_desktop()
+        user32 = ctypes.windll.user32
+        candidates: list[WindowInfo] = []
+        focused_hwnd = user32.GetForegroundWindow()
+
+        def enum_cb(hwnd: int, lparam: int) -> bool:
+            if not user32.IsWindowVisible(hwnd):
+                return True
+
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length == 0:
+                return True
+            title_buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, title_buf, length + 1)
+            title = title_buf.value
+
+            class_buf = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, class_buf, 256)
+            class_name = class_buf.value
+
+            if not is_verified_rogue_window(
+                title=title,
+                wm_class=(class_name,),
+                steam_app_id=STEAM_ROGUE_APP_ID,
+                allow_test_window_tag=self.allow_test_window_tag,
+            ):
+                return True
+
+            c_rect = _RECT()
+            user32.GetClientRect(hwnd, ctypes.byref(c_rect))
+            w = c_rect.right
+            h = c_rect.bottom
+            if w < 160 or h < 120:
+                return True
+
+            pt = _POINT(0, 0)
+            user32.ClientToScreen(hwnd, ctypes.byref(pt))
+
+            candidates.append(
+                WindowInfo(
+                    window_id=hwnd,
+                    title=title,
+                    wm_class=(class_name,),
+                    steam_app_id=STEAM_ROGUE_APP_ID,
+                    x=pt.x,
+                    y=pt.y,
+                    width=w,
+                    height=h,
+                    is_viewable=True,
+                    has_focus=(hwnd == focused_hwnd),
+                )
+            )
+            return True
+
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+        user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+
+        if not candidates:
+            return None
+
+        candidates.sort(
+            key=lambda w: (
+                bool(self.allow_test_window_tag and self.allow_test_window_tag in w.title),
+                any("sdl_app" in c.lower() for c in w.wm_class),
+                "cpu speed" in w.title.lower() or "program:" in w.title.lower(),
+                "dosbox" in w.title.lower(),
+                w.has_focus,
+                w.width * w.height,
+            ),
+            reverse=True,
+        )
+        return candidates[0]
+
+    def ensure_verified_focus(self, window_id: int, timeout: float = 1.0) -> WindowInfo:
+        self._attach_desktop()
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        if not user32.IsWindow(window_id) or not user32.IsWindowVisible(window_id):
+            raise WindowFocusLostError(
+                f"Game window {hex(window_id)} is no longer valid or visible."
+            )
+
+        length = user32.GetWindowTextLengthW(window_id)
+        title_buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(window_id, title_buf, length + 1)
+        title = title_buf.value
+
+        class_buf = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(window_id, class_buf, 256)
+        class_name = class_buf.value
+
+        if not is_verified_rogue_window(
+            title=title,
+            wm_class=(class_name,),
+            steam_app_id=STEAM_ROGUE_APP_ID,
+            allow_test_window_tag=self.allow_test_window_tag,
+        ):
+            raise WindowFocusLostError(
+                f"Window {hex(window_id)} failed identity verification ({title!r})."
+            )
+
+        focused_hwnd = user32.GetForegroundWindow()
+        if focused_hwnd != window_id:
+            try:
+                user32.ShowWindow(window_id, 9)  # SW_RESTORE
+                user32.BringWindowToTop(window_id)
+                user32.SwitchToThisWindow(window_id, True)
+                cur_t = kernel32.GetCurrentThreadId()
+                win_t = user32.GetWindowThreadProcessId(window_id, None)
+                if cur_t != win_t and win_t:
+                    attached = bool(user32.AttachThreadInput(cur_t, win_t, True))
+                    try:
+                        user32.SetForegroundWindow(window_id)
+                    finally:
+                        if attached:
+                            user32.AttachThreadInput(cur_t, win_t, False)
+                else:
+                    user32.SetForegroundWindow(window_id)
+            except Exception:
+                pass
+            focused_hwnd = user32.GetForegroundWindow()
+
+        c_rect = _RECT()
+        user32.GetClientRect(window_id, ctypes.byref(c_rect))
+        pt = _POINT(0, 0)
+        user32.ClientToScreen(window_id, ctypes.byref(pt))
+
+        return WindowInfo(
+            window_id=window_id,
+            title=title,
+            wm_class=(class_name,),
+            steam_app_id=STEAM_ROGUE_APP_ID,
+            x=pt.x,
+            y=pt.y,
+            width=c_rect.right,
+            height=c_rect.bottom,
+            is_viewable=True,
+            has_focus=(focused_hwnd == window_id),
+        )
+
+
+X11WindowManager = Win32WindowManager if sys.platform == "win32" else PosixX11WindowManager

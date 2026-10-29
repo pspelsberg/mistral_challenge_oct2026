@@ -23,6 +23,17 @@ from rogue_agent.shared.domain import (
     GameState,
 )
 
+_REDIRECT_PRIORITY: tuple[Direction, ...] = (
+    Direction.EAST,
+    Direction.SOUTH,
+    Direction.WEST,
+    Direction.NORTH,
+    Direction.SOUTHEAST,
+    Direction.SOUTHWEST,
+    Direction.NORTHEAST,
+    Direction.NORTHWEST,
+)
+
 
 class MistralGameplayAgent:
     """Autonomous Rogue gameplay agent powered exclusively by mistral-large-4."""
@@ -47,12 +58,114 @@ class MistralGameplayAgent:
 
     def _get_client(self) -> Mistral:
         if self._client is None:
-            if not self.settings.mistral_api_key or self.settings.mistral_api_key == "your_mistral_api_key_here":
+            if (
+                not self.settings.mistral_api_key
+                or self.settings.mistral_api_key == "your_mistral_api_key_here"
+            ):
                 raise RuntimeError(
                     "MISTRAL_API_KEY is not configured. Set MISTRAL_API_KEY in .env or use --dry-run."
                 )
             self._client = Mistral(api_key=self.settings.mistral_api_key)
         return self._client
+
+    @staticmethod
+    def _parse_forbidden_direction(memory_summary: str) -> Direction | None:
+        """Extract the forbidden reverse direction from an oscillation alert in memory."""
+        if "FORBIDDEN OSCILLATION DIRECTION: direction='" in memory_summary:
+            try:
+                f_val = (
+                    memory_summary.split("FORBIDDEN OSCILLATION DIRECTION: direction='", 1)[1]
+                    .split("'", 1)[0]
+                    .lower()
+                )
+                return Direction(f_val)
+            except Exception:
+                return None
+
+        if "Bounced (" in memory_summary:
+            try:
+                part = memory_summary.split("Bounced (", 1)[1]
+                p2_str, rest = part.split(") -> (", 1)
+                p1_str = rest.split(")", 1)[0]
+                r2, c2 = (int(x.strip()) for x in p2_str.split(","))
+                r1, c1 = (int(x.strip()) for x in p1_str.split(","))
+                return Direction.from_delta(r1 - r2, c1 - c2)
+            except Exception:
+                return None
+
+        return None
+
+    @classmethod
+    def _apply_anti_oscillation_guard(
+        cls,
+        action: GameAction,
+        observation: GameObservation,
+        memory_summary: str,
+    ) -> GameAction:
+        """Redirect movement only if the model chose a forbidden reverse or unwalkable move during oscillation."""
+        if action.action_type not in (ActionType.MOVE, ActionType.FAST_MOVE) or not action.direction:
+            return action
+
+        has_oscillation_alert = any(
+            marker in memory_summary
+            for marker in (
+                "OSCILLATION ALERT",
+                "MACRO-BACKTRACKING",
+                "FORBIDDEN OSCILLATION DIRECTION",
+            )
+        )
+        if not has_oscillation_alert:
+            return action
+
+        walkable_dirs = [
+            str(d).upper()
+            for d in (observation.inferred_metadata.get("walkable_directions") or [])
+        ]
+        forbidden_dir = cls._parse_forbidden_direction(memory_summary)
+        is_forbidden = bool(forbidden_dir and action.direction == forbidden_dir)
+        is_unwalkable = bool(walkable_dirs and not action.direction.matches_walkable(walkable_dirs))
+
+        if not (is_forbidden or is_unwalkable):
+            return action
+
+        redirect_dir: Direction | None = None
+        if "TOPOLOGICAL COMPASS HINT:" in memory_summary and "direction='" in memory_summary:
+            try:
+                raw_compass_d = (
+                    memory_summary.split("TOPOLOGICAL COMPASS HINT:", 1)[1]
+                    .split("direction='", 1)[1]
+                    .split("'", 1)[0]
+                    .lower()
+                )
+                c_dir = Direction(raw_compass_d)
+                if c_dir.matches_walkable(walkable_dirs) and c_dir != forbidden_dir:
+                    redirect_dir = c_dir
+            except Exception:
+                pass
+
+        if redirect_dir is None:
+            for d_cand in _REDIRECT_PRIORITY:
+                if d_cand.matches_walkable(walkable_dirs) and d_cand != forbidden_dir:
+                    redirect_dir = d_cand
+                    break
+
+        if redirect_dir is None:
+            return action
+
+        reason = (
+            f"forbidden reverse move {action.direction.value} (would continue oscillation)"
+            if is_forbidden
+            else f"unwalkable/wall-collision move {action.direction.value}"
+        )
+        return action.model_copy(
+            update={
+                "direction": redirect_dir,
+                "steps": 1,
+                "decision_summary": (
+                    f"[Anti-Oscillation Guard] Intercepted {reason}; redirected to {redirect_dir.value}"
+                ),
+            }
+        )
 
     def decide_action(
         self,
@@ -79,7 +192,7 @@ class MistralGameplayAgent:
                     messages=messages,
                     response_format=MistralActionDecision,
                     temperature=0.2,
-                    max_tokens=2048,
+                    max_tokens=250,
                     reasoning_effort="none",
                     timeout_ms=timeout_ms,
                 )
@@ -89,7 +202,7 @@ class MistralGameplayAgent:
                     messages=messages,
                     response_format=MistralActionDecision,
                     temperature=0.2,
-                    max_tokens=2048,
+                    max_tokens=250,
                     timeout_ms=timeout_ms,
                 )
 
@@ -98,6 +211,13 @@ class MistralGameplayAgent:
             latency_ms = (time.monotonic() - t0) * 1000.0
         except Exception as exc:
             self.invalid_responses += 1
+            exc_str = str(exc)
+            if any(term in exc_str for term in ("delimiter", "JSON", "Expecting", "Unterminated")):
+                return safe_fallback_action(
+                    observation,
+                    reason=f"LLM output JSON format error ({exc})",
+                    player_name=self.settings.player_name,
+                )
             raise RuntimeError(f"Mistral Large 4 API request failed: {exc}") from exc
 
         usage = getattr(response, "usage", None)
@@ -113,11 +233,16 @@ class MistralGameplayAgent:
                 if isinstance(raw_content, str):
                     parsed = MistralActionDecision.model_validate(json.loads(raw_content))
             if parsed is None:
-                raise ValueError("Empty parsed decision from mistral-large-4")
-            return parsed.to_game_action(observation)
+                raise ValueError("Empty parsed decision from Mistral API response")
+            action = parsed.to_game_action(observation)
+            return self._apply_anti_oscillation_guard(action, observation, memory_summary)
         except Exception as exc:
             self.invalid_responses += 1
-            return safe_fallback_action(observation, reason=f"Schema fallback ({exc})")
+            return safe_fallback_action(
+                observation,
+                reason=f"Schema fallback ({exc})",
+                player_name=self.settings.player_name,
+            )
 
     def get_usage_stats(self) -> dict[str, Any]:
         stats = self.guard.get_stats()
@@ -179,9 +304,9 @@ class DryRunGameplayAgent:
             )
         direction = self._directions[(self._turn - 1) % len(self._directions)]
         walkable = observation.inferred_metadata.get("walkable_directions")
-        if isinstance(walkable, list) and walkable and direction.value not in walkable:
+        if isinstance(walkable, list) and walkable and not direction.matches_walkable(walkable):
             for cand in self._directions:
-                if cand.value in walkable:
+                if cand.matches_walkable(walkable):
                     direction = cand
                     break
         return GameAction(

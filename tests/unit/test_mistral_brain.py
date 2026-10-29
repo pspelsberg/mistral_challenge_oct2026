@@ -51,6 +51,48 @@ def test_mistral_action_decision_repairs_incomplete_actions() -> None:
 
 
 @pytest.mark.unit
+def test_wall_guard_matches_short_code_walkable_directions() -> None:
+    """Verify Wall-Guard in MistralActionDecision recognizes short codes ('E', 'W') in walkable_directions."""
+    obs = GameObservation(
+        backend=BackendId.STEAM,
+        rogue_version="epyx-1.49",
+        game_state=GameState.PLAYING,
+        inferred_metadata={"walkable_directions": ["W", "S"]},
+    )
+    # 1. Valid direction ('W') must NOT be overwritten
+    valid_decision = MistralActionDecision(
+        observed_state=GameState.PLAYING,
+        action=ActionType.MOVE,
+        direction=Direction.WEST,
+        decision_summary="Step west along open floor",
+    )
+    act_valid = valid_decision.to_game_action(obs)
+    assert act_valid.direction == Direction.WEST
+    assert "Wall-Guard" not in act_valid.decision_summary
+
+    # 2. Blocked direction ('N') must be redirected to an open direction ('S' or 'W')
+    blocked_decision = MistralActionDecision(
+        observed_state=GameState.PLAYING,
+        action=ActionType.MOVE,
+        direction=Direction.NORTH,
+        decision_summary="Attempt north into wall",
+    )
+    act_redirected = blocked_decision.to_game_action(obs)
+    assert act_redirected.direction in (Direction.SOUTH, Direction.WEST)
+    assert "Wall-Guard" in act_redirected.decision_summary
+
+
+@pytest.mark.unit
+def test_security_settings_hide_api_key_and_reject_unsafe_player_name() -> None:
+    """Verify API key is excluded from repr() and player_name rejects injection characters."""
+    settings = RogueAgentSettings(MISTRAL_API_KEY="super-secret-mistral-token-123")
+    assert "super-secret-mistral-token-123" not in repr(settings)
+
+    with pytest.raises(ValueError, match="player_name"):
+        RogueAgentSettings(ROGUE_PLAYER_NAME="LeChonk,passgo\n")
+
+
+@pytest.mark.unit
 def test_multimodal_and_terminal_prompt_builders() -> None:
     """Verify Steam uses ASCII-primary + Screenshot-backup while Terminal uses 80x24 text."""
     # 1. Steam with clean reconstructed 80x25 ASCII grid (no backup needed -> 0 image tokens)
@@ -175,3 +217,90 @@ def test_mistral_gameplay_agent_with_mock_sdk_client() -> None:
     assert action.direction == Direction.EAST
     assert agent.get_usage_stats()["api_calls"] == 1
     assert agent.get_usage_stats()["total_tokens"] == 515
+
+
+@pytest.mark.unit
+def test_anti_oscillation_guard_redirects_to_compass() -> None:
+    """Verify that when trapped in a wall-bouncing oscillation, the guard overrides to the compass direction."""
+    parsed_obj = MistralActionDecision(
+        observed_state=GameState.PLAYING,
+        current_objective="Explore",
+        action=ActionType.MOVE,
+        direction=Direction.NORTH,
+        decision_summary="Bouncing north into wall",
+        confidence=0.8,
+    )
+    fake_response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(parsed=parsed_obj, content=""))],
+        usage=SimpleNamespace(prompt_tokens=400, completion_tokens=50),
+    )
+
+    class FakeChat:
+        def parse(self, **kwargs):
+            return fake_response
+
+    fake_client = SimpleNamespace(chat=FakeChat())
+    settings = RogueAgentSettings(MISTRAL_API_KEY="test-key")
+    agent = MistralGameplayAgent(settings=settings, client=fake_client)
+
+    obs = GameObservation(
+        backend=BackendId.STEAM,
+        rogue_version="epyx-1.49",
+        game_state=GameState.PLAYING,
+        inferred_metadata={
+            "player_position": (4, 74),
+            "walkable_directions": ["N", "W"],
+        },
+    )
+    mem_summary = (
+        "- OSCILLATION ALERT! Bounced (4, 74) -> (2, 74) -> (4, 74).\n"
+        "- TOPOLOGICAL COMPASS HINT: Closest unexplored room door along walkable tiles is "
+        "(5, 70) (walk_steps=5); take first_step=W (direction='west')!"
+    )
+    action = agent.decide_action(obs, mem_summary, "Explore")
+    assert action.direction == Direction.WEST
+    assert "Anti-Oscillation Guard" in action.decision_summary
+
+
+@pytest.mark.unit
+def test_anti_oscillation_guard_does_not_override_non_forbidden_move() -> None:
+    """Verify that when the model is already moving away from the oscillation, the guard leaves it untouched."""
+    parsed_obj = MistralActionDecision(
+        observed_state=GameState.PLAYING,
+        current_objective="Explore",
+        action=ActionType.MOVE,
+        direction=Direction.WEST,
+        decision_summary="Moving west into new corridor to break oscillation",
+        confidence=0.9,
+    )
+    fake_response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(parsed=parsed_obj, content=""))],
+        usage=SimpleNamespace(prompt_tokens=400, completion_tokens=50),
+    )
+
+    class FakeChat:
+        def parse(self, **kwargs):
+            return fake_response
+
+    fake_client = SimpleNamespace(chat=FakeChat())
+    settings = RogueAgentSettings(MISTRAL_API_KEY="test-key")
+    agent = MistralGameplayAgent(settings=settings, client=fake_client)
+
+    obs = GameObservation(
+        backend=BackendId.STEAM,
+        rogue_version="epyx-1.49",
+        game_state=GameState.PLAYING,
+        inferred_metadata={
+            "player_position": (4, 74),
+            "walkable_directions": ["N", "W"],
+        },
+    )
+    mem_summary = (
+        "- OSCILLATION ALERT! Bounced (4, 74) -> (2, 74) -> (4, 74).\n"
+        "- FORBIDDEN OSCILLATION DIRECTION: direction='north'!\n"
+        "- TOPOLOGICAL COMPASS HINT: Closest unexplored room door along walkable tiles is "
+        "(5, 70) (walk_steps=5); take first_step=W (direction='west')!"
+    )
+    action = agent.decide_action(obs, mem_summary, "Explore")
+    assert action.direction == Direction.WEST
+    assert "Anti-Oscillation Guard" not in action.decision_summary

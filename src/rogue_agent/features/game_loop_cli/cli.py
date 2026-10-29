@@ -95,17 +95,26 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    if sys.platform == "win32":
+        try:
+            if hasattr(sys.stdout, "reconfigure"):
+                sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            if hasattr(sys.stderr, "reconfigure"):
+                sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     parser = build_arg_parser()
     args = parser.parse_args(argv)
-    console = Console()
+    console = Console(legacy_windows=False)
 
     settings = RogueAgentSettings()
     if args.max_turns is not None:
-        settings.max_turns = args.max_turns
+        settings.max_turns = max(1, args.max_turns)
     if args.max_api_calls is not None:
-        settings.max_api_calls = args.max_api_calls
+        settings.max_api_calls = max(1, args.max_api_calls)
     if args.max_budget_usd is not None:
-        settings.max_budget_usd = args.max_budget_usd
+        settings.max_budget_usd = max(0.001, args.max_budget_usd)
     if args.always_send_screenshot:
         settings.steam_screenshot_backup_only = False
 
@@ -121,6 +130,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.export_gif is not None:
         if args.export_gif == "latest":
+            if not settings.runs_dir.is_dir():
+                console.print("[bold red]Runs directory does not exist.[/bold red]")
+                return 1
             candidates = sorted(
                 d for d in settings.runs_dir.iterdir() if d.is_dir() and (d / "frames").is_dir()
             )
@@ -129,7 +141,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1
             target_dir = candidates[-1]
         else:
-            target_dir = Path(args.export_gif)
+            target_dir = Path(args.export_gif).resolve()
+            if not target_dir.is_dir():
+                console.print(f"[bold red]Session directory not found: {target_dir}[/bold red]")
+                return 1
         gif_path = export_session_gif(target_dir)
         console.print_json(data={"exported_gif": str(gif_path), "session_dir": str(target_dir)})
         return 0

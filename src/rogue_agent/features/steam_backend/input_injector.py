@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from typing import Any
 
-from Xlib import XK, X
-from Xlib.ext import xtest
+if sys.platform == "win32":
+    import ctypes
+    XK = None  # type: ignore
+    X = None  # type: ignore
+    xtest = None  # type: ignore
+else:
+    try:
+        from Xlib import XK, X
+        from Xlib.ext import xtest
+    except ImportError:
+        XK = None  # type: ignore
+        X = None  # type: ignore
+        xtest = None  # type: ignore
 
 from rogue_agent.features.steam_backend.window_manager import X11WindowManager
 
@@ -26,7 +38,7 @@ _CHAR_TO_KEYSYM_NAME: dict[str, tuple[str, bool]] = {
 }
 
 
-class X11KeyInjector:
+class PosixX11KeyInjector:
     """Injects keystrokes only when the verified Steam Rogue window holds input focus."""
 
     def __init__(self, window_manager: X11WindowManager) -> None:
@@ -104,3 +116,146 @@ class X11KeyInjector:
             xtest.fake_input(dpy, X.KeyRelease, ret_kc)
             xtest.fake_input(dpy, X.KeyRelease, alt_kc)
             dpy.sync()
+
+
+class Win32KeyInjector:
+    """Injects keystrokes to the verified Steam Rogue DOSBox window on Windows."""
+
+    _WM_KEYDOWN = 0x0100
+    _WM_KEYUP = 0x0101
+    _VK_SHIFT = 0x10
+    _VK_MENU = 0x12
+    _VK_RETURN = 0x0D
+    _SHIFT_SCAN = 0x2A
+    _KEYEVENTF_EXTENDEDKEY = 0x0001
+    _KEYEVENTF_KEYUP = 0x0002
+
+    _SPECIAL_KEYS: dict[str, tuple[int, bool]] = {
+        "Up": (0x26, True),
+        "Down": (0x28, True),
+        "Left": (0x25, True),
+        "Right": (0x27, True),
+        "Home": (0x24, True),
+        "Prior": (0x21, True),  # PageUp
+        "End": (0x23, True),
+        "Next": (0x22, True),   # PageDown
+        "space": (0x20, False),
+        "Return": (0x0D, False),
+        "Escape": (0x1B, False),
+    }
+
+    def __init__(self, window_manager: Any) -> None:
+        self.window_manager = window_manager
+
+    def send_key_sequence(
+        self,
+        window_id: int,
+        keys: list[str],
+        hold_seconds: float = 0.04,
+        inter_key_delay: float = 0.06,
+    ) -> None:
+        user32 = ctypes.windll.user32
+
+        for idx, token in enumerate(keys):
+            win_info = self.window_manager.ensure_verified_focus(window_id)
+            # Security invariant: only emit global hardware keybd_event when the verified
+            # game window genuinely holds foreground focus.
+            use_global_keybd = bool(
+                getattr(win_info, "has_focus", False)
+                and user32.GetForegroundWindow() == window_id
+            )
+
+            if token in self._SPECIAL_KEYS:
+                vk, is_extended = self._SPECIAL_KEYS[token]
+                needs_shift = False
+            elif len(token) == 1:
+                vk_scan = user32.VkKeyScanW(ord(token))
+                vk = vk_scan & 0xFF
+                needs_shift = bool(vk_scan & 0x0100)
+                is_extended = False
+            else:
+                vk_scan = user32.VkKeyScanW(ord(token[0]))
+                vk = vk_scan & 0xFF
+                needs_shift = bool(vk_scan & 0x0100)
+                is_extended = False
+
+            scan = user32.MapVirtualKeyW(vk, 0)
+            ext_flag = (1 << 24) if is_extended else 0
+            flags_down = self._KEYEVENTF_EXTENDEDKEY if is_extended else 0
+            flags_up = flags_down | self._KEYEVENTF_KEYUP
+            lparam_down = 1 | (scan << 16) | ext_flag
+            lparam_up = 1 | (scan << 16) | ext_flag | (1 << 30) | (1 << 31)
+
+            try:
+                if needs_shift:
+                    if use_global_keybd:
+                        user32.keybd_event(self._VK_SHIFT, self._SHIFT_SCAN, 0, 0)
+                    user32.PostMessageW(
+                        window_id,
+                        self._WM_KEYDOWN,
+                        self._VK_SHIFT,
+                        1 | (self._SHIFT_SCAN << 16),
+                    )
+                    time.sleep(0.01)
+
+                if use_global_keybd:
+                    user32.keybd_event(vk, scan, flags_down, 0)
+                user32.PostMessageW(window_id, self._WM_KEYDOWN, vk, lparam_down)
+                time.sleep(hold_seconds)
+            finally:
+                if use_global_keybd:
+                    user32.keybd_event(vk, scan, flags_up, 0)
+                user32.PostMessageW(window_id, self._WM_KEYUP, vk, lparam_up)
+
+                if needs_shift:
+                    time.sleep(0.01)
+                    if use_global_keybd:
+                        user32.keybd_event(
+                            self._VK_SHIFT,
+                            self._SHIFT_SCAN,
+                            self._KEYEVENTF_KEYUP,
+                            0,
+                        )
+                    user32.PostMessageW(
+                        window_id,
+                        self._WM_KEYUP,
+                        self._VK_SHIFT,
+                        1 | (self._SHIFT_SCAN << 16) | (1 << 30) | (1 << 31),
+                    )
+
+            if idx + 1 < len(keys):
+                time.sleep(inter_key_delay)
+
+    def send_alt_enter(self, window_id: int) -> None:
+        win_info = self.window_manager.ensure_verified_focus(window_id)
+        user32 = ctypes.windll.user32
+        use_global_keybd = bool(
+            getattr(win_info, "has_focus", False)
+            and user32.GetForegroundWindow() == window_id
+        )
+        try:
+            if use_global_keybd:
+                user32.keybd_event(self._VK_MENU, 0x38, 0, 0)
+                user32.keybd_event(self._VK_RETURN, 0x1C, 0, 0)
+            user32.PostMessageW(window_id, self._WM_KEYDOWN, self._VK_MENU, 1 | (0x38 << 16))
+            user32.PostMessageW(window_id, self._WM_KEYDOWN, self._VK_RETURN, 1 | (0x1C << 16))
+            time.sleep(0.05)
+        finally:
+            if use_global_keybd:
+                user32.keybd_event(self._VK_RETURN, 0x1C, self._KEYEVENTF_KEYUP, 0)
+                user32.keybd_event(self._VK_MENU, 0x38, self._KEYEVENTF_KEYUP, 0)
+            user32.PostMessageW(
+                window_id,
+                self._WM_KEYUP,
+                self._VK_RETURN,
+                1 | (0x1C << 16) | (1 << 30) | (1 << 31),
+            )
+            user32.PostMessageW(
+                window_id,
+                self._WM_KEYUP,
+                self._VK_MENU,
+                1 | (0x38 << 16) | (1 << 30) | (1 << 31),
+            )
+
+
+X11KeyInjector = Win32KeyInjector if sys.platform == "win32" else PosixX11KeyInjector

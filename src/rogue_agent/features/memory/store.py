@@ -13,10 +13,13 @@ from rogue_agent.features.memory.models import (
 )
 from rogue_agent.features.memory.playbook import CrossSessionPlaybookManager
 from rogue_agent.shared.domain import (
+    DIRECTION_DELTAS_BY_CODE,
     ActionExecutionResult,
     ActionType,
+    Direction,
     GameAction,
     GameObservation,
+    extract_numbered_row_map,
 )
 
 
@@ -48,6 +51,7 @@ class BoundedAgentMemory:
         self.known_stairs_by_level: dict[int, list[tuple[int, int]]] = {}
         self.known_inventory: dict[str, str] = self._default_starting_inventory()
         self.max_depth_reached: int = 1
+        self.active_oscillation_forbidden_dir: Direction | None = None
 
     @staticmethod
     def _default_starting_inventory() -> dict[str, str]:
@@ -119,19 +123,12 @@ class BoundedAgentMemory:
             "E": (0, 1),
             "W": (0, -1),
         }
-        all_deltas = {
-            **cardinal_deltas,
-            "NE": (-1, 1),
-            "NW": (-1, -1),
-            "SE": (1, 1),
-            "SW": (1, -1),
-        }
 
         queue: deque[tuple[int, int, int, str]] = deque()
-        allowed_initial = set(walkable_dirs) if walkable_dirs else set(all_deltas.keys())
+        allowed_initial = set(walkable_dirs) if walkable_dirs else set(DIRECTION_DELTAS_BY_CODE.keys())
         start_ch = _tile(pr, pc)
 
-        for d_code, (dr, dc) in all_deltas.items():
+        for d_code, (dr, dc) in DIRECTION_DELTAS_BY_CODE.items():
             if walkable_dirs and d_code not in allowed_initial:
                 continue
             nr, nc = pr + dr, pc + dc
@@ -148,7 +145,7 @@ class BoundedAgentMemory:
         while queue:
             cr, cc, dist, first_dir = queue.popleft()
             c_ch = _tile(cr, cc)
-            cand_map = cardinal_deltas if c_ch in ("+", "#") else all_deltas
+            cand_map = cardinal_deltas if c_ch in ("+", "#") else DIRECTION_DELTAS_BY_CODE
             for d_code, (dr, dc) in cand_map.items():
                 nr, nc = cr + dr, cc + dc
                 if (nr, nc) in routes or (nr, nc) == (pr, pc):
@@ -163,11 +160,13 @@ class BoundedAgentMemory:
 
         return routes
 
-    @staticmethod
+    @classmethod
     def _mark_segment_visited(
+        cls,
         visited_set: set[tuple[int, int]],
         p1: tuple[int, int],
         p2: tuple[int, int],
+        screen_text: str | None = None,
     ) -> None:
         r1, c1 = int(p1[0]), int(p1[1])
         r2, c2 = int(p2[0]), int(p2[1])
@@ -177,29 +176,43 @@ class BoundedAgentMemory:
             step = 1 if c2 > c1 else -1
             for c in range(c1, c2 + step, step):
                 visited_set.add((r1, c))
-        elif c1 == c2 and r1 != r2:
+            return
+        if c1 == c2 and r1 != r2:
             step = 1 if r2 > r1 else -1
             for r in range(r1, r2 + step, step):
                 visited_set.add((r, c1))
+            return
+
+        # Curved or multi-bend corridor movement (e.g. fast_move across bends):
+        # run BFS on visible screen to trace and mark all intermediate corridor tiles
+        row_map = cls._extract_row_map(screen_text)
+        if not row_map:
+            return
+
+        def _is_nav(r: int, c: int) -> bool:
+            s = row_map.get(r, "")
+            ch = s[c] if 0 <= c < len(s) else " "
+            return ch in (".", "#", "+", "%", "*", ":", "?", "@") or ("A" <= ch <= "Z")
+
+        queue: deque[tuple[tuple[int, int], list[tuple[int, int]]]] = deque([(p1, [p1])])
+        seen = {p1}
+        while queue:
+            curr, path = queue.popleft()
+            if curr == p2:
+                for pt in path:
+                    visited_set.add(pt)
+                return
+            cr, cc = curr
+            for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                nr, nc = cr + dr, cc + dc
+                np = (nr, nc)
+                if np not in seen and (np == p2 or _is_nav(nr, nc)):
+                    seen.add(np)
+                    queue.append((np, path + [np]))
 
     @staticmethod
     def _extract_row_map(screen_text: str | None) -> dict[int, str]:
-        row_map: dict[int, str] = {}
-        if not screen_text:
-            return row_map
-        lines = screen_text.splitlines()
-        has_numbered = any(
-            len(line) >= 4 and line[:2].isdigit() and line[2:4] == ": "
-            for line in lines
-        )
-        if has_numbered:
-            for line in lines:
-                if len(line) >= 4 and line[:2].isdigit() and line[2:4] == ": ":
-                    row_map[int(line[:2])] = line[4:]
-        else:
-            for idx, line in enumerate(lines):
-                row_map[idx] = line
-        return row_map
+        return extract_numbered_row_map(screen_text)
 
     @classmethod
     def _analyze_screen_topology(
@@ -208,7 +221,13 @@ class BoundedAgentMemory:
         visited_curr: set[tuple[int, int]],
         player_pos: tuple[int, int] | None,
         doors: list[Any],
-    ) -> tuple[list[tuple[int, int]], list[tuple[int, int]], list[tuple[int, int]], bool]:
+    ) -> tuple[
+        list[tuple[int, int]],
+        list[tuple[int, int]],
+        list[tuple[int, int]],
+        bool,
+        list[tuple[int, int]],
+    ]:
         """Classify doors into (unexplored, explored), find unexplored '#' corridor frontiers,
         and auto-mark 100% cleared rooms (0 items, 0 stairs, 0 unexplored doors) in visited_curr."""
         row_map = cls._extract_row_map(screen_text)
@@ -222,7 +241,6 @@ class BoundedAgentMemory:
                 return True
             if not row_map:
                 return False
-            # If any adjacent corridor '#' or floor '.' tile is unvisited, the door is not fully traversed
             for d_r, d_c in ((-1, 0), (1, 0), (0, -1), (0, 1)):
                 nr, nc = dr + d_r, dc + d_c
                 ch = _tile(nr, nc)
@@ -241,8 +259,8 @@ class BoundedAgentMemory:
                     visited_doors.append(dp)
 
         current_room_cleared = False
+        current_room_unvisited_doors: list[tuple[int, int]] = []
         if row_map:
-            # Flood-fill connected room floor components and mark cleared rooms as visited
             room_chars = frozenset({".", "@", "%", "*", "!", "?", ":", ")", "]", "/", "=", ",", "^"})
             seen_room_tiles: set[tuple[int, int]] = set()
             unvisited_doors_set = set(unvisited_doors)
@@ -255,7 +273,6 @@ class BoundedAgentMemory:
                         continue
                     if ch not in room_chars and not ("A" <= ch <= "Z"):
                         continue
-                    # BFS across this room interior
                     comp: set[tuple[int, int]] = set()
                     border_doors: set[tuple[int, int]] = set()
                     has_loot_or_stairs = False
@@ -293,8 +310,15 @@ class BoundedAgentMemory:
                             player_pos in comp or player_pos in border_doors
                         ):
                             current_room_cleared = True
+                    elif player_pos is not None and (
+                        player_pos in comp or player_pos in border_doors
+                    ):
+                        for d_pos in sorted(
+                            border_doors & unvisited_doors_set,
+                            key=lambda dp: (0 if dp not in visited_curr else 1, dp),
+                        ):
+                            current_room_unvisited_doors.append(d_pos)
 
-        # Find unexplored '#' corridor frontiers (unvisited '#' adjacent to a visited tile)
         corridor_frontiers: list[tuple[int, int]] = []
         if row_map:
             for r, line_str in row_map.items():
@@ -308,7 +332,13 @@ class BoundedAgentMemory:
                         ):
                             corridor_frontiers.append((r, c))
 
-        return unvisited_doors, visited_doors, corridor_frontiers, current_room_cleared
+        return (
+            unvisited_doors,
+            visited_doors,
+            corridor_frontiers,
+            current_room_cleared,
+            current_room_unvisited_doors,
+        )
 
     def reset(self) -> None:
         self.current_objective = "Explore Dungeon Level 1 and locate the staircase"
@@ -322,6 +352,7 @@ class BoundedAgentMemory:
         self.known_stairs_by_level.clear()
         self.known_inventory = self._default_starting_inventory()
         self.max_depth_reached: int = 1
+        self.active_oscillation_forbidden_dir = None
 
     def record_turn(
         self,
@@ -381,21 +412,44 @@ class BoundedAgentMemory:
                             visited_set,
                             (int(wp1[0]), int(wp1[1])),
                             (int(wp2[0]), int(wp2[1])),
+                            screen_text=obs_after.screen_text,
                         )
             elif (
                 isinstance(pos_before, tuple)
                 and len(pos_before) == 2
                 and lvl_before == lvl_after
             ):
-                self._mark_segment_visited(visited_set, pos_before, pos_after)
+                self._mark_segment_visited(
+                    visited_set, pos_before, pos_after, screen_text=obs_after.screen_text
+                )
             if (
                 len(self.recent_positions) >= 2
                 and pos_after == self.recent_positions[-2]
                 and pos_before != pos_after
             ):
+                dr = pos_before[0] - pos_after[0]
+                dc = pos_before[1] - pos_after[1]
+                forbidden_d = Direction.from_delta(dr, dc)
+                self.active_oscillation_forbidden_dir = forbidden_d
+                f_hint = (
+                    f" (FORBIDDEN REVERSE DIRECTION: direction='{forbidden_d.value}')"
+                    if forbidden_d
+                    else ""
+                )
                 self.recent_failed_actions.append(
-                    f"Turn {turn_index}: OSCILLATION ALERT! Bounced {pos_after} -> {pos_before} -> {pos_after}. "
-                    f"Do NOT reverse direction back to {pos_before}; pick a different direction or door!"
+                    f"Turn {turn_index}: IMMEDIATE OSCILLATION ALERT! Bounced {pos_after} -> {pos_before} -> {pos_after}. "
+                    f"Do NOT reverse direction back to {pos_before}{f_hint}; pick a different direction or door!"
+                )
+            else:
+                self.active_oscillation_forbidden_dir = None
+            if (
+                len(self.recent_positions) >= 4
+                and pos_after in list(self.recent_positions)[-6:-2]
+                and pos_before != pos_after
+            ):
+                self.recent_failed_actions.append(
+                    f"Turn {turn_index}: MACRO-BACKTRACKING DETECTED! You just returned to {pos_after}, which you already visited "
+                    f"a few turns ago! Stop oscillating between rooms/corridors; proceed forward into UNEXPLORED doors/areas!"
                 )
             self.recent_positions.append(pos_after)
 
@@ -467,16 +521,33 @@ class BoundedAgentMemory:
         ):
             self.known_inventory.pop(action.item_key.lower(), None)
 
-        # Record visible threats as verified facts
+        # Record visible threats as verified facts (and prune stale threats when cleared)
         monsters = obs_after.inferred_metadata.get("visible_monsters")
         if isinstance(monsters, list) and monsters:
             summary = ", ".join(f"{m['symbol']}@({m['row']},{m['col']})" for m in monsters[:4])
+            self.verified_facts = deque(
+                [f for f in self.verified_facts if f.category != "threat"],
+                maxlen=self.max_facts,
+            )
             self.verified_facts.append(
                 MemoryFact(
                     turn=turn_index,
                     status=EpistemicStatus.FACT,
                     category="threat",
                     content=f"Visible monsters on Level {lvl_after}: {summary}",
+                )
+            )
+        elif isinstance(monsters, list) and not monsters and any(f.category == "threat" for f in self.verified_facts):
+            self.verified_facts = deque(
+                [f for f in self.verified_facts if f.category != "threat"],
+                maxlen=self.max_facts,
+            )
+            self.verified_facts.append(
+                MemoryFact(
+                    turn=turn_index,
+                    status=EpistemicStatus.FACT,
+                    category="threat",
+                    content=f"All visible monsters cleared on Level {lvl_after}",
                 )
             )
 
@@ -529,7 +600,7 @@ class BoundedAgentMemory:
                     turn=turn_index,
                     status=EpistemicStatus.HYPOTHESIS,
                     category="model_note",
-                    content=action.notable_memory_fact,
+                    content=action.notable_memory_fact[:220],
                 )
             )
 
@@ -583,22 +654,30 @@ class BoundedAgentMemory:
             adj = observation.inferred_metadata.get("adjacent_tiles") or {}
             lvl_curr = observation.visible_status.dungeon_level or 1
             visited_curr = self.visited_by_level.get(lvl_curr, set())
-            stairs_curr = (
-                observation.inferred_metadata.get("stairs_positions")
-                or self.known_stairs_by_level.get(lvl_curr)
-                or []
-            )
+            stairs_visible_screen = observation.inferred_metadata.get("stairs_positions") or []
+            stairs_known_level = self.known_stairs_by_level.get(lvl_curr) or []
             if observation.inferred_metadata.get("standing_on_stairs") or (
-                pos is not None and pos in stairs_curr
+                pos is not None and pos in stairs_visible_screen
             ):
                 lines.append(
                     f"- STAIRCASE ALERT: You are standing DIRECTLY ON the staircase '%' at {pos}! "
                     f"Use action='descend_stairs' immediately to descend to Level {lvl_curr + 1}!"
                 )
-            elif stairs_curr:
+            elif stairs_visible_screen:
                 lines.append(
-                    f"- STAIRCASE VISIBLE ON LEVEL {lvl_curr}: '%' is at {stairs_curr}! "
-                    f"Move to {stairs_curr[0]} and use action='descend_stairs'!"
+                    f"- STAIRCASE VISIBLE ON SCREEN: '%' is at {stairs_visible_screen}! "
+                    f"Move to {stairs_visible_screen[0]} and use action='descend_stairs'!"
+                )
+            elif stairs_known_level:
+                lines.append(
+                    f"- KNOWN STAIRCASE (PREVIOUSLY SEEN ON LEVEL {lvl_curr}): '%' was found at {stairs_known_level}. "
+                    f"Navigate back when ready to descend."
+                )
+            if self.active_oscillation_forbidden_dir:
+                lines.append(
+                    f"- FORBIDDEN OSCILLATION DIRECTION: direction='{self.active_oscillation_forbidden_dir.value}'! "
+                    f"You have been caught in a wall-bouncing loop! You are STRICTLY FORBIDDEN from choosing direction='{self.active_oscillation_forbidden_dir.value}'! "
+                    f"Choose ANY other walkable direction or door to break free!"
                 )
             if isinstance(pos, tuple) and len(pos) == 2 and isinstance(walkable, list):
                 pr, pc = int(pos[0]), int(pos[1])
@@ -608,11 +687,18 @@ class BoundedAgentMemory:
                     visited_doors,
                     corridor_frontiers,
                     current_room_cleared,
+                    current_room_unvisited_doors,
                 ) = self._analyze_screen_topology(
                     observation.screen_text,
                     visited_curr,
                     pos,
                     doors if isinstance(doors, list) else [],
+                )
+
+                routes = self._compute_bfs_routes(
+                    observation.screen_text,
+                    pos,
+                    walkable if isinstance(walkable, list) else None,
                 )
 
                 if current_room_cleared:
@@ -621,22 +707,22 @@ class BoundedAgentMemory:
                         f"all its doors explored)! Do NOT walk onto '.' floor tiles inside this room — "
                         f"exit immediately toward an UNVISITED Door '+' or UNEXPLORED Corridor Branch '#'!"
                     )
+                elif current_room_unvisited_doors:
+                    formatted_room_doors = [
+                        self._format_relative_coord(pr, pc, dr, dc, routes)
+                        for dr, dc in current_room_unvisited_doors
+                    ]
+                    lines.append(
+                        f"- UNEXPLORED DOOR IN THIS ROOM (TOP PRIORITY): You are in a room with unexplored door(s) "
+                        f"{formatted_room_doors}! Do NOT backtrack into visited corridors or rooms; "
+                        f"head directly to this unexplored door!"
+                    )
 
-                deltas = {
-                    "N": (-1, 0),
-                    "S": (1, 0),
-                    "E": (0, 1),
-                    "W": (0, -1),
-                    "NE": (-1, 1),
-                    "NW": (-1, -1),
-                    "SE": (1, 1),
-                    "SW": (1, -1),
-                }
                 unvisited_dirs: list[str] = []
                 visited_dirs: list[str] = []
                 for d_code in walkable:
-                    if d_code in deltas:
-                        dr, dc = deltas[d_code]
+                    if d_code in DIRECTION_DELTAS_BY_CODE:
+                        dr, dc = DIRECTION_DELTAS_BY_CODE[d_code]
                         np = (pr + dr, pc + dc)
                         tile_ch = adj.get(d_code, "?")
                         entry = f"{d_code}->{np}('{tile_ch}')"
@@ -653,15 +739,13 @@ class BoundedAgentMemory:
                         f"- ALREADY VISITED Walkable Neighbors from {pos}: {visited_dirs}"
                     )
 
-                routes = self._compute_bfs_routes(
-                    observation.screen_text,
-                    pos,
-                    walkable if isinstance(walkable, list) else None,
-                )
-
                 if unvisited_doors:
                     unvisited_doors.sort(
                         key=lambda pt: (
+                            0 if (pt not in visited_curr and pt in current_room_unvisited_doors) else
+                            1 if (pt not in visited_curr) else
+                            2 if (pt in current_room_unvisited_doors) else
+                            3,
                             routes.get(pt, (999, ""))[0],
                             max(abs(pt[0] - pr), abs(pt[1] - pc)),
                         )
@@ -707,28 +791,71 @@ class BoundedAgentMemory:
                         f"- Visible Items on Screen (Step onto tile to pick up): {formatted_items}"
                     )
 
-                code_to_full_dir = {
-                    "N": "north",
-                    "S": "south",
-                    "E": "east",
-                    "W": "west",
-                    "NE": "northeast",
-                    "NW": "northwest",
-                    "SE": "southeast",
-                    "SW": "southwest",
-                }
-                frontier_candidates = list(unvisited_doors) + list(corridor_frontiers)
-                reachable_frontiers = [
+                reachable_doors = [
                     (routes[pt][0], routes[pt][1], pt)
-                    for pt in frontier_candidates
+                    for pt in unvisited_doors
                     if pt in routes
                 ]
-                if reachable_frontiers and not stairs_curr:
-                    reachable_frontiers.sort(key=lambda x: x[0])
-                    best_steps, best_first, best_pt = reachable_frontiers[0]
-                    full_d = code_to_full_dir.get(best_first, best_first)
+                reachable_corridors = [
+                    (routes[pt][0], routes[pt][1], pt)
+                    for pt in corridor_frontiers
+                    if pt in routes
+                ]
+                reachable_items: list[tuple[int, str, tuple[int, int], dict[str, Any]]] = []
+                if isinstance(items_curr, list) and items_curr:
+                    for it in items_curr:
+                        if isinstance(it, dict) and "row" in it and "col" in it:
+                            itr, itc = int(it["row"]), int(it["col"])
+                            if (itr, itc) in routes and (itr, itc) not in visited_curr:
+                                st, first_step = routes[(itr, itc)]
+                                reachable_items.append((st, first_step, (itr, itc), it))
+
+                if reachable_items and not stairs_visible_screen:
+                    reachable_items.sort(key=lambda x: x[0])
+                    b_item_steps, b_item_first, b_item_pt, b_item = reachable_items[0]
+                    item_in_room = current_room_unvisited_doors and (
+                        b_item_steps <= (reachable_doors[0][0] if reachable_doors else 999) + 4
+                    )
+                    if item_in_room or not reachable_doors:
+                        d_enum = Direction.from_short_code(b_item_first)
+                        full_d = d_enum.value if d_enum else b_item_first
+                        sym = b_item.get("symbol", "*")
+                        itype = b_item.get("type", "item")
+                        lines.append(
+                            f"- TOPOLOGICAL COMPASS HINT: Closest uncollected item in this room is '{sym}' ({itype}) at "
+                            f"{b_item_pt} (walk_steps={b_item_steps}); take first_step={b_item_first} (direction='{full_d}')!"
+                        )
+                if not any("TOPOLOGICAL COMPASS HINT:" in line_txt for line_txt in lines) and reachable_doors and not stairs_visible_screen:
+                    reachable_doors.sort(
+                        key=lambda x: (
+                            0 if (x[2] not in visited_curr and x[2] in current_room_unvisited_doors) else
+                            1 if (x[2] not in visited_curr) else
+                            2 if (x[2] in current_room_unvisited_doors) else
+                            3,
+                            x[0],
+                        )
+                    )
+                    best_steps, best_first, best_pt = reachable_doors[0]
+                    d_enum = Direction.from_short_code(best_first)
+                    full_d = d_enum.value if d_enum else best_first
+                    door_type = (
+                        "unexplored room door"
+                        if (best_pt not in visited_curr and best_pt in current_room_unvisited_doors)
+                        else "unvisited door"
+                        if best_pt not in visited_curr
+                        else "explored room exit door"
+                    )
                     lines.append(
-                        f"- TOPOLOGICAL COMPASS HINT: Closest unexplored frontier along walkable tiles is "
+                        f"- TOPOLOGICAL COMPASS HINT: Closest {door_type} along walkable tiles is "
+                        f"{best_pt} (walk_steps={best_steps}); take first_step={best_first} (direction='{full_d}')!"
+                    )
+                elif not any("TOPOLOGICAL COMPASS HINT:" in line_txt for line_txt in lines) and reachable_corridors and not stairs_visible_screen:
+                    reachable_corridors.sort(key=lambda x: x[0])
+                    best_steps, best_first, best_pt = reachable_corridors[0]
+                    d_enum = Direction.from_short_code(best_first)
+                    full_d = d_enum.value if d_enum else best_first
+                    lines.append(
+                        f"- TOPOLOGICAL COMPASS HINT: Closest unexplored corridor frontier along walkable tiles is "
                         f"{best_pt} (walk_steps={best_steps}); take first_step={best_first} (direction='{full_d}')!"
                     )
 
@@ -746,47 +873,55 @@ class BoundedAgentMemory:
                     )
 
                 monsters = observation.inferred_metadata.get("visible_monsters") or []
-                delta_to_dir = {
-                    (-1, 0): ("N", "north"),
-                    (1, 0): ("S", "south"),
-                    (0, 1): ("E", "east"),
-                    (0, -1): ("W", "west"),
-                    (-1, 1): ("NE", "northeast"),
-                    (-1, -1): ("NW", "northwest"),
-                    (1, 1): ("SE", "southeast"),
-                    (1, -1): ("SW", "southwest"),
-                }
 
-                # Check if an open, monster-free step toward a visible staircase '%' exists
+                # Collect all adjacent monsters in walkable directions
+                adjacent_monsters: list[dict[str, Any]] = []
+                if isinstance(monsters, list):
+                    for m in monsters:
+                        mr, mc = int(m.get("row", -99)), int(m.get("col", -99))
+                        dr_m, dc_m = mr - pr, mc - pc
+                        if max(abs(dr_m), abs(dc_m)) == 1:
+                            d_enum = Direction.from_delta(dr_m, dc_m)
+                            if d_enum is not None and d_enum.short_code in walkable:
+                                adjacent_monsters.append({
+                                    "monster": m,
+                                    "symbol": str(m.get("symbol", "M")),
+                                    "row": mr,
+                                    "col": mc,
+                                    "dir_code": d_enum.short_code,
+                                    "full_dir": d_enum.value,
+                                })
+
+                # Check if an open, monster-free step toward a visible staircase '%' on active screen exists
                 open_stair_sprint_dir: tuple[str, str, tuple[int, int], int] | None = None
-                if stairs_curr and pos not in stairs_curr:
-                    sr, sc = int(stairs_curr[0][0]), int(stairs_curr[0][1])
+                if stairs_visible_screen and pos not in stairs_visible_screen:
+                    sr, sc = int(stairs_visible_screen[0][0]), int(stairs_visible_screen[0][1])
                     s_dist = max(abs(sr - pr), abs(sc - pc))
                     step_r = 0 if sr == pr else (1 if sr > pr else -1)
                     step_c = 0 if sc == pc else (1 if sc > pc else -1)
                     cand_deltas = [(step_r, step_c)]
                     if step_r != 0 and step_c != 0:
                         cand_deltas.extend([(step_r, 0), (0, step_c)])
-                    for cd in cand_deltas:
-                        d_info = delta_to_dir.get(cd)
-                        if d_info is not None and d_info[0] in walkable:
-                            t_ch = str(adj.get(d_info[0], ""))
+                    for cd_r, cd_c in cand_deltas:
+                        d_enum = Direction.from_delta(cd_r, cd_c)
+                        if d_enum is not None and d_enum.short_code in walkable:
+                            t_ch = str(adj.get(d_enum.short_code, ""))
                             if not (len(t_ch) == 1 and t_ch.isalpha() and t_ch.isupper()):
                                 open_stair_sprint_dir = (
-                                    d_info[0],
-                                    d_info[1],
+                                    d_enum.short_code,
+                                    d_enum.value,
                                     (sr, sc),
                                     s_dist,
                                 )
                                 break
 
-                if open_stair_sprint_dir is not None:
+                # Only emit STAIRCASE SPRINT ALERT if there are NO adjacent monsters blocking melee
+                if open_stair_sprint_dir is not None and not adjacent_monsters:
                     sc_code, full_dir, st_pos, st_dist = open_stair_sprint_dir
                     lines.append(
                         f"- STAIRCASE SPRINT ALERT (HIGHEST PRIORITY): Staircase '%' at {st_pos} is "
                         f"{st_dist} tile(s) away and {sc_code} (direction='{full_dir}') is OPEN! "
-                        f"Ignore non-blocking monsters and move direction='{full_dir}' immediately "
-                        f"to reach {st_pos} and descend!"
+                        f"Move direction='{full_dir}' immediately to reach {st_pos} and descend!"
                     )
 
                 if isinstance(monsters, list) and monsters:
@@ -803,7 +938,7 @@ class BoundedAgentMemory:
                         for k, v in sorted(self.known_inventory.items())
                         if "potion" in v.lower() or "scroll" in v.lower()
                     ]
-                    if len(monsters) >= 2 and not observation.inferred_metadata.get(
+                    if len(monsters) >= 2 and not adjacent_monsters and not observation.inferred_metadata.get(
                         "in_doorway_or_corridor", False
                     ):
                         chokepoint_dirs = [
@@ -818,47 +953,47 @@ class BoundedAgentMemory:
                                 f"{chokepoint_dirs[0]} ('{adj.get(chokepoint_dirs[0])}') to force 1v1 combat "
                                 f"so two monsters cannot hit you in the same turn!"
                             )
-                    any_adjacent_monster = False
-                    for m in monsters:
-                        mr, mc = int(m.get("row", -99)), int(m.get("col", -99))
-                        sym = str(m.get("symbol", "M"))
-                        d_info = delta_to_dir.get((mr - pr, mc - pc))
-                        if d_info is not None and d_info[0] in walkable:
-                            any_adjacent_monster = True
-                            sc, full_dir = d_info
-                            if open_stair_sprint_dir is not None:
+
+                    # Handle adjacent monsters: IMMEDIATE ATTACK DOCTRINE
+                    for am in adjacent_monsters:
+                        sym = am["symbol"]
+                        mr, mc = am["row"], am["col"]
+                        sc, full_dir = am["dir_code"], am["full_dir"]
+
+                        can_step_onto_stairs = (
+                            open_stair_sprint_dir is not None
+                            and open_stair_sprint_dir[3] == 1
+                        )
+                        if can_step_onto_stairs and sym not in ("B", "K"):
+                            lines.append(
+                                f"- STAIRCASE ESCAPE AVAILABLE: Monster '{sym}' is adjacent at ({mr}, {mc}), "
+                                f"but staircase '%' is 1 step away at {open_stair_sprint_dir[2]} ({open_stair_sprint_dir[0]} / direction='{open_stair_sprint_dir[1]}')! "
+                                f"You may step onto the stairs with action='move', direction='{open_stair_sprint_dir[1]}', steps=1 "
+                                f"to escape, OR attack '{sym}' in melee with action='move', direction='{full_dir}', steps=1."
+                            )
+                        elif low_hp and usable_items:
+                            lines.append(
+                                f"- CRITICAL LOW HP ALERT (HP={hp_curr}/{hp_max}): Monster '{sym}' is "
+                                f"adjacent at ({mr}, {mc}) ({sc})! Before risking another melee swing at "
+                                f"critical HP, consider using an inventory potion/scroll ({', '.join(usable_items)}) "
+                                f"with action='quaff_potion' or action='read_scroll'!"
+                            )
+                        else:
+                            is_fast_flier = sym in ("K", "B", "M")
+                            if is_fast_flier:
                                 lines.append(
-                                    f"- ADJACENT MONSTER NOTE: '{sym}' is at ({mr}, {mc}) ({sc}), "
-                                    f"but the path {open_stair_sprint_dir[0]} (direction='{open_stair_sprint_dir[1]}') "
-                                    f"to staircase '%' at {open_stair_sprint_dir[2]} is OPEN! Step "
-                                    f"direction='{open_stair_sprint_dir[1]}' toward the stairs instead of fighting '{sym}'!"
-                                )
-                            elif low_hp and usable_items:
-                                lines.append(
-                                    f"- CRITICAL LOW HP ALERT (HP={hp_curr}/{hp_max}): Monster '{sym}' is "
-                                    f"adjacent at ({mr}, {mc}) ({sc})! Before risking another melee swing at "
-                                    f"critical HP, consider using an inventory potion/scroll ({', '.join(usable_items)}) "
-                                    f"with action='quaff_potion' or action='read_scroll'!"
+                                    f"- TACTICAL COMBAT ALERT (IMMEDIATE MELEE ATTACK): Fast flier / monster '{sym}' at ({mr}, {mc}) "
+                                    f"is ADJACENT ({sc} / direction='{full_dir}')! Never flee or circle (fliers move at 2x speed "
+                                    f"and get free hits, while Bat 'B' dies in 1-2 hits from your mace). "
+                                    f"Stand your ground and ATTACK IMMEDIATELY in melee with action='move', direction='{full_dir}', steps=1!"
                                 )
                             else:
-                                is_fast_flier = sym in ("K", "B")
-                                if is_fast_flier:
-                                    lines.append(
-                                        f"- TACTICAL COMBAT ALERT: Fast flier '{sym}' at ({mr}, {mc}) is ADJACENT "
-                                        f"({sc} / direction='{full_dir}')! Never flee (fliers move at 2x speed "
-                                        f"and get free hits). Stand and attack in melee with "
-                                        f"action='move', direction='{full_dir}', steps=1!"
-                                    )
-                                else:
-                                    lines.append(
-                                        f"- TACTICAL COMBAT ALERT: Monster '{sym}' at ({mr}, {mc}) is ADJACENT "
-                                        f"({sc} / direction='{full_dir}'). Assess threat: heavy hitters ('H', 'O') "
-                                        f"deal 1d8 damage; if HP is within one-shot range (<= 6-7 HP), tactical corridor "
-                                        f"retreat or distance is viable as 1x monsters do not get free hits. "
-                                        f"Otherwise, attack in melee with action='move', direction='{full_dir}', steps=1."
-                                    )
+                                lines.append(
+                                    f"- TACTICAL COMBAT ALERT (MELEE ATTACK): Monster '{sym}' at ({mr}, {mc}) is ADJACENT "
+                                    f"({sc} / direction='{full_dir}'). Attack in melee with action='move', direction='{full_dir}', steps=1."
+                                )
 
-                    if not any_adjacent_monster and open_stair_sprint_dir is None:
+                    if not adjacent_monsters and open_stair_sprint_dir is None:
                         row_map_los = self._extract_row_map(observation.screen_text)
                         arrow_slots = [
                             k
@@ -876,10 +1011,9 @@ class BoundedAgentMemory:
                                 continue
                             step_r = 0 if dr_m == 0 else (1 if dr_m > 0 else -1)
                             step_c = 0 if dc_m == 0 else (1 if dc_m > 0 else -1)
-                            d_info = delta_to_dir.get((step_r, step_c))
-                            if d_info is None or d_info[0] not in walkable:
+                            d_enum = Direction.from_delta(step_r, step_c)
+                            if d_enum is None or d_enum.short_code not in walkable:
                                 continue
-                            # Check line of fire across floor/corridor tiles
                             los_clear = True
                             for s_idx in range(1, dist_m):
                                 lr, lc = pr + step_r * s_idx, pc + step_c * s_idx
@@ -890,7 +1024,7 @@ class BoundedAgentMemory:
                                     break
                             if not los_clear:
                                 continue
-                            sc, full_dir = d_info
+                            sc, full_dir = d_enum.short_code, d_enum.value
                             if arrow_slots:
                                 lines.append(
                                     f"- RANGED WAIT-SHOT / FIRST-STRIKE ALERT: Monster '{sym}' at ({mr}, {mc}) "
@@ -922,7 +1056,6 @@ class BoundedAgentMemory:
                         f"You can safely recover HP with action='rest', steps=5 before entering dangerous new rooms."
                     )
                 else:
-                    # Safe Scroll Discovery when monster-free, healthy HP, and holding >= 2 unidentified scrolls
                     hp_c = observation.visible_status.hits_current or 12
                     hp_m = observation.visible_status.hits_max or 12
                     unidentified_scrolls = [
@@ -933,7 +1066,7 @@ class BoundedAgentMemory:
                     if (
                         len(unidentified_scrolls) >= 2
                         and hp_c * 4 >= hp_m * 3
-                        and not stairs_curr
+                        and not stairs_visible_screen
                     ):
                         first_sc = unidentified_scrolls[0]
                         lines.append(

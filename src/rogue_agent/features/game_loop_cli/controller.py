@@ -52,7 +52,7 @@ class AgentGameController:
         self.telemetry = telemetry
         self.guard = guard
         self.dry_run = dry_run
-        self.console = console or Console()
+        self.console = console or Console(legacy_windows=False)
         self.on_turn_callback = on_turn_callback
         self._stop_requested = False
 
@@ -132,10 +132,11 @@ class AgentGameController:
                 confidence=1.0,
             )
         if obs.game_state == GameState.CHARACTER_NAME_ENTRY:
+            player_name = getattr(getattr(self.guard, "settings", None), "player_name", "LeChonk")
             return GameAction(
                 action_type=ActionType.ENTER_NAME,
-                text_input="LeChonk",
-                decision_summary="[0-Token UI Bypass] Enter character name LeChonk",
+                text_input=player_name,
+                decision_summary=f"[0-Token UI Bypass] Enter character name {player_name}",
                 objective="Enter dungeon",
                 confidence=1.0,
             )

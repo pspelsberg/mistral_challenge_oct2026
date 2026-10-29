@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class EpistemicStatus(StrEnum):
@@ -21,6 +22,12 @@ class MemoryFact(BaseModel):
     status: EpistemicStatus
     category: str
     content: str = Field(max_length=220)
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def _truncate_content(cls, v: Any) -> str:
+        s = str(v)
+        return s[:220] if len(s) > 220 else s
 
 
 class TurnMemoryRecord(BaseModel):

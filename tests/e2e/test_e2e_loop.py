@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 from pathlib import Path
 
 import pytest
-from Xlib import X, display
+
+try:
+    from Xlib import X, display
+except ImportError:
+    X = None  # type: ignore
+    display = None  # type: ignore
 
 from rogue_agent.features.game_loop_cli.cli import main as cli_main
 from rogue_agent.features.game_loop_cli.controller import AgentGameController
@@ -20,6 +26,7 @@ from rogue_agent.shared.config import RogueAgentSettings
 
 
 @pytest.mark.e2e
+@pytest.mark.skipif(sys.platform == "win32", reason="Terminal Rogue POSIX PTY backend requires Linux / WSL")
 def test_e2e_terminal_loop_multi_turn(tmp_path: Path) -> None:
     """Run a 6-turn autonomous loop on the real Terminal Rogue 5.4.4 PTY backend."""
     settings = RogueAgentSettings(
@@ -53,6 +60,7 @@ def test_e2e_terminal_loop_multi_turn(tmp_path: Path) -> None:
 
 
 @pytest.mark.e2e
+@pytest.mark.skipif(sys.platform == "win32", reason="Terminal Rogue POSIX PTY backend requires Linux / WSL")
 def test_cli_doctor_and_dry_run_terminal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify CLI entry point (`rogue-agent --doctor` and `--backend terminal --dry-run`)."""
     monkeypatch.setenv("ROGUE_RUNS_DIR", str(tmp_path))

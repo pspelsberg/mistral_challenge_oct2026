@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 MANDATORY_GAMEPLAY_MODEL = "mistral-large-4"
+_SAFE_PLAYER_NAME_RE = re.compile(r"^[a-zA-Z0-9 _-]{1,23}$")
 
 
 class RogueAgentSettings(BaseSettings):
@@ -19,7 +21,11 @@ class RogueAgentSettings(BaseSettings):
         extra="ignore",
     )
 
-    mistral_api_key: str = Field(default="", validation_alias="MISTRAL_API_KEY")
+    mistral_api_key: str = Field(
+        default="",
+        validation_alias="MISTRAL_API_KEY",
+        repr=False,
+    )
     model_id: str = Field(default=MANDATORY_GAMEPLAY_MODEL, validation_alias="ROGUE_MODEL_ID")
 
     # Safety, Latency, and Budget Guardrails (Section 12)
@@ -35,6 +41,9 @@ class RogueAgentSettings(BaseSettings):
         default=30.0, gt=1.0, le=180.0, validation_alias="ROGUE_REQUEST_TIMEOUT_SECONDS"
     )
     max_retries: int = Field(default=3, ge=0, le=10, validation_alias="ROGUE_MAX_RETRIES")
+    menu_wait_seconds: float = Field(
+        default=1.5, ge=0.0, le=10.0, validation_alias="ROGUE_MENU_WAIT_SECONDS"
+    )
 
     # Pricing estimate for mistral-large-4 (conservative upper-bound per 1M tokens)
     estimated_input_cost_per_1m: float = Field(default=2.00)
@@ -50,7 +59,11 @@ class RogueAgentSettings(BaseSettings):
         validation_alias="ROGUE_STEAM_INSTALL_DIR",
     )
     runs_dir: Path = Field(default=Path("./runs"), validation_alias="ROGUE_RUNS_DIR")
-    player_name: str = Field(default="LeChonk", max_length=23)
+    player_name: str = Field(
+        default="LeChonk",
+        max_length=23,
+        validation_alias="ROGUE_PLAYER_NAME",
+    )
     steam_screenshot_backup_only: bool = Field(
         default=True, validation_alias="ROGUE_STEAM_SCREENSHOT_BACKUP_ONLY"
     )
@@ -64,3 +77,14 @@ class RogueAgentSettings(BaseSettings):
                 f"Competition rules require '{MANDATORY_GAMEPLAY_MODEL}', got '{value}'."
             )
         return value
+
+    @field_validator("player_name")
+    @classmethod
+    def sanitize_player_name(cls, value: str) -> str:
+        """Sanitize player_name to prevent ROGUEOPTS or keystroke injection."""
+        cleaned = value.strip()
+        if not cleaned or not _SAFE_PLAYER_NAME_RE.match(cleaned):
+            raise ValueError(
+                "player_name must be 1..23 characters containing only [a-zA-Z0-9 _-]."
+            )
+        return cleaned

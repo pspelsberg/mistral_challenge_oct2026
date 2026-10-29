@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from rogue_agent.features.terminal_backend.pty_process import PtyRogueProcess
@@ -9,6 +10,8 @@ from rogue_agent.features.terminal_backend.screen_parser import parse_terminal_s
 from rogue_agent.shared.config import RogueAgentSettings
 from rogue_agent.shared.controls import ControlValidationError, TerminalRogueControlProfile
 from rogue_agent.shared.domain import (
+    MENU_SELECTION_ACTIONS,
+    REPEATABLE_HORIZON_ACTIONS,
     ActionExecutionResult,
     ActionType,
     BackendId,
@@ -16,28 +19,12 @@ from rogue_agent.shared.domain import (
     GameAction,
     GameObservation,
     GameState,
+    extract_numbered_row_map,
 )
 
-_DIAGONAL_COMPONENTS: dict[Direction, tuple[Direction, Direction]] = {
-    Direction.NORTHEAST: (Direction.NORTH, Direction.EAST),
-    Direction.NORTHWEST: (Direction.NORTH, Direction.WEST),
-    Direction.SOUTHEAST: (Direction.SOUTH, Direction.EAST),
-    Direction.SOUTHWEST: (Direction.SOUTH, Direction.WEST),
-}
-
-_OPPOSITE_DIRECTION: dict[Direction, Direction] = {
-    Direction.NORTH: Direction.SOUTH,
-    Direction.SOUTH: Direction.NORTH,
-    Direction.EAST: Direction.WEST,
-    Direction.WEST: Direction.EAST,
-}
-
-_SHORT_CODE_TO_DIRECTION: dict[str, Direction] = {
-    "N": Direction.NORTH,
-    "S": Direction.SOUTH,
-    "E": Direction.EAST,
-    "W": Direction.WEST,
-}
+_CARDINAL_DIRECTIONS: frozenset[Direction] = frozenset(
+    {Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST}
+)
 
 
 class TerminalGameAdapter:
@@ -81,8 +68,7 @@ class TerminalGameAdapter:
     @staticmethod
     def _clean_more_banner(msg: str) -> str:
         """Strip trailing --More-- markers from a top-line Rogue message."""
-        cleaned = msg.replace("--More--", "").strip()
-        return cleaned
+        return msg.replace("--More--", "").strip()
 
     def observe(self, auto_drain_more: bool = True) -> GameObservation:
         """Read current PTY screen buffer and construct a typed GameObservation.
@@ -137,8 +123,6 @@ class TerminalGameAdapter:
         ):
             top_lower = lines[0].lower() if lines else ""
             if parsed.game_state == GameState.ITEM_SELECTION and "identify" in top_lower:
-                # Scroll of identify requires selecting a valid item of the target type
-                # (Escape does not cancel whatis() in Rogue 5.4.4 unless * reveals 0 items).
                 drained_count += 1
                 self._pty.send_keys(["*"])
                 self._pty.drain_output(max_wait=0.08, quiet_window=0.025)
@@ -152,12 +136,10 @@ class TerminalGameAdapter:
                         if cleaned_inv and cleaned_inv not in collected_messages:
                             collected_messages.append(cleaned_inv)
                 if inv_slots:
-                    # Dismiss the --Press space to continue-- list, then send the best slot
                     non_starting = [ch for ch in inv_slots if ch > "e"]
                     chosen_slot = non_starting[0] if non_starting else inv_slots[0]
                     self._pty.send_keys([" ", chosen_slot])
                 else:
-                    # No matching items in pack ("You don't have anything appropriate--More--")
                     self._pty.send_keys([" "])
                 self._pty.drain_output(max_wait=0.08, quiet_window=0.025)
                 lines = self._pty.get_screen_lines()
@@ -288,11 +270,7 @@ class TerminalGameAdapter:
         if (dr_step, dc_step) not in ((0, 1), (0, -1), (1, 0), (-1, 0)):
             return None
 
-        row_map: dict[int, str] = {}
-        if obs.screen_text:
-            for line in obs.screen_text.splitlines():
-                if len(line) >= 4 and line[:2].isdigit() and line[2:4] == ": ":
-                    row_map[int(line[:2])] = line[4:]
+        row_map = extract_numbered_row_map(obs.screen_text)
 
         def _tile(r: int, c: int) -> str:
             row_str = row_map.get(r, "")
@@ -306,28 +284,22 @@ class TerminalGameAdapter:
             dr, dc = int(d[0]), int(d[1])
             is_visited_door = bool(visited_tiles and (dr, dc) in visited_tiles)
             if dc_step != 0:
-                # Moving E or W: check doors 1..6 rows N/S whose column lies ahead
                 ahead = (dc - pc) * dc_step
                 perp = abs(dr - pr)
             else:
-                # Moving N or S: check doors 1..6 cols E/W whose row lies ahead
                 ahead = (dr - pr) * dr_step
                 perp = abs(dc - pc)
             if not (1 <= ahead <= 25 and 1 <= perp <= 6):
                 continue
 
             if row_map:
-                # 1. Every step along our travel line up to `ahead` must be room floor '.'
                 if any(
                     _tile(pr + dr_step * s, pc + dc_step * s) != "."
                     for s in range(1, ahead + 1)
                 ):
                     continue
-                # 2. The tile one step past `ahead` must also be '.' (otherwise native
-                #    fast_move already stops at the room wall without overshooting).
                 if _tile(pr + dr_step * (ahead + 1), pc + dc_step * (ahead + 1)) != ".":
                     continue
-                # 3. Every perpendicular tile between the stop point and the door '+' must be '.'
                 stop_r, stop_c = pr + dr_step * ahead, pc + dc_step * ahead
                 p_dr = 0 if dr == stop_r else (1 if dr > stop_r else -1)
                 p_dc = 0 if dc == stop_c else (1 if dc > stop_c else -1)
@@ -352,8 +324,6 @@ class TerminalGameAdapter:
         if best_steps is None:
             return None
 
-        # If an item lies directly on our line of travel closer/further in the room,
-        # let native fast_move stop on the item first.
         for it in items:
             ir, ic = int(it.get("row", -1)), int(it.get("col", -1))
             if dc_step != 0 and ir == pr and (ic - pc) * dc_step > 0:
@@ -379,11 +349,7 @@ class TerminalGameAdapter:
         if (dr_step, dc_step) == (0, 0):
             return None
 
-        row_map: dict[int, str] = {}
-        if obs.screen_text:
-            for line in obs.screen_text.splitlines():
-                if len(line) >= 4 and line[:2].isdigit() and line[2:4] == ": ":
-                    row_map[int(line[:2])] = line[4:]
+        row_map = extract_numbered_row_map(obs.screen_text)
 
         def _tile(r: int, c: int) -> str:
             row_str = row_map.get(r, "")
@@ -413,12 +379,13 @@ class TerminalGameAdapter:
         if (
             state_before == GameState.PLAYING
             and action.action_type in (ActionType.MOVE, ActionType.FAST_MOVE)
-            and action.direction in _DIAGONAL_COMPONENTS
+            and action.direction is not None
+            and action.direction.is_diagonal
         ):
             walkable = obs_initial.inferred_metadata.get("walkable_directions", [])
-            if isinstance(walkable, list) and action.direction.short_code not in walkable:
-                for cand in _DIAGONAL_COMPONENTS[action.direction]:
-                    if cand.short_code in walkable:
+            if isinstance(walkable, list) and not action.direction.matches_walkable(walkable):
+                for cand in action.direction.diagonal_components or ():
+                    if cand.matches_walkable(walkable):
                         action = action.model_copy(
                             update={
                                 "action_type": ActionType.MOVE,
@@ -428,12 +395,10 @@ class TerminalGameAdapter:
                         )
                         break
 
-        # Prevent fast_move inside a room from sliding past a mid-wall door '+',
-        # or ensure fast_move toward an open staircase '%' completes up to 5 steps even if monsters are nearby.
         was_fast_move_cardinal = (
             state_before == GameState.PLAYING
             and action.action_type == ActionType.FAST_MOVE
-            and action.direction in _OPPOSITE_DIRECTION
+            and action.direction in _CARDINAL_DIRECTIONS
         )
         fast_move_dir: Direction | None = action.direction if was_fast_move_cardinal else None
         door_align_steps: int | None = None
@@ -483,7 +448,7 @@ class TerminalGameAdapter:
             if door_align_steps is not None
             else (
                 action.steps
-                if action.action_type in (ActionType.MOVE, ActionType.SEARCH, ActionType.REST)
+                if action.action_type in REPEATABLE_HORIZON_ACTIONS
                 else 1
             )
         )
@@ -498,6 +463,12 @@ class TerminalGameAdapter:
         if isinstance(pos_init, tuple) and len(pos_init) == 2:
             self._turn_waypoints.append(pos_init)
         monsters_initial = obs_initial.inferred_metadata.get("visible_monsters") or []
+        menu_wait_seconds = float(getattr(self.settings, "menu_wait_seconds", 1.5))
+        is_menu_selection_action = (
+            action.action_type in MENU_SELECTION_ACTIONS
+            and action.item_key is not None
+        )
+
         for step_idx in range(requested_steps):
             pos_before = obs_curr.inferred_metadata.get("player_position")
             hp_before = obs_curr.visible_status.hits_current
@@ -508,7 +479,28 @@ class TerminalGameAdapter:
             )
 
             try:
-                self._pty.send_keys(step_keys)
+                if is_menu_selection_action and len(step_keys) >= 2:
+                    prompt_keys = step_keys[:-1]
+                    selection_key = step_keys[-1:]
+                    self._pty.send_keys(prompt_keys)
+                    if menu_wait_seconds > 0:
+                        time.sleep(menu_wait_seconds)
+                    self._pty.send_keys(selection_key)
+                elif action.action_type == ActionType.OPEN_INVENTORY:
+                    self._pty.send_keys(step_keys)
+                    if menu_wait_seconds > 0:
+                        time.sleep(menu_wait_seconds)
+                else:
+                    if (
+                        state_before in (
+                            GameState.INVENTORY,
+                            GameState.ITEM_SELECTION,
+                            GameState.MORE_PROMPT,
+                        )
+                        and menu_wait_seconds > 0
+                    ):
+                        time.sleep(menu_wait_seconds)
+                    self._pty.send_keys(step_keys)
             except Exception as exc:
                 self._last_action_result = f"PTY write error: {exc}"
                 return ActionExecutionResult(
@@ -588,7 +580,7 @@ class TerminalGameAdapter:
                     and pos_after is not None
                 ):
                     walkable = obs_after.inferred_metadata.get("walkable_directions", [])
-                    if isinstance(walkable, list) and action.direction.short_code not in walkable:
+                    if isinstance(walkable, list) and not action.direction.matches_walkable(walkable):
                         interrupted_early = True
                         interrupt_reason = "wall_ahead_in_ascii_grid"
                         obs_curr = obs_after
@@ -626,8 +618,6 @@ class TerminalGameAdapter:
 
             obs_curr = obs_after
 
-        # If door_align_steps aligned '@' directly adjacent to a mid-wall door '+' (perp == 1)
-        # with no monsters or items present, step 1 tile onto '+' so we don't need an extra turn.
         if (
             door_align_steps is not None
             and fast_move_dir is not None
@@ -650,21 +640,17 @@ class TerminalGameAdapter:
                     and adj_align.get(p_code) == "+"
                     and p_code in walk_align
                 ):
-                    p_dir = _SHORT_CODE_TO_DIRECTION[p_code]
-                    d_key = self.controls.direction_key(p_dir)
-                    self._pty.send_keys([d_key])
-                    all_keys_sent.append(d_key)
-                    obs_curr = self.observe()
-                    p_now = obs_curr.inferred_metadata.get("player_position")
-                    if isinstance(p_now, tuple) and len(p_now) == 2:
-                        self._turn_waypoints.append(p_now)
-                    break
+                    p_dir = Direction.from_short_code(p_code)
+                    if p_dir is not None:
+                        d_key = self.controls.direction_key(p_dir)
+                        self._pty.send_keys([d_key])
+                        all_keys_sent.append(d_key)
+                        obs_curr = self.observe()
+                        p_now = obs_curr.inferred_metadata.get("player_position")
+                        if isinstance(p_now, tuple) and len(p_now) == 2:
+                            self._turn_waypoints.append(p_now)
+                        break
 
-        # Corridor auto-cornering & door-threshold stepping for FAST_MOVE:
-        # 1. In Rogue 5.4.4, H/J/K/L stops 1 tile BEFORE a door '+', leaving the room dark.
-        #    Stepping 1 tile onto '+' reveals the room on the same turn.
-        # 2. In winding 1-way corridors ('#') with no branching intersections, automatically
-        #    follow up to 3 forced bends until reaching a door '+', junction, dead end, or monster.
         if (
             was_fast_move_cardinal
             and fast_move_dir is not None
@@ -700,15 +686,17 @@ class TerminalGameAdapter:
                     break
 
                 # Case B: Inside a non-branching 1-way '#' corridor bend
-                cardinal_walk = [d for d in walk_now if d in _SHORT_CODE_TO_DIRECTION]
+                cardinal_walk = [d for d in walk_now if d in ("N", "S", "E", "W")]
                 if not cardinal_walk or any(adj_now.get(d) not in ("#", "+") for d in cardinal_walk):
                     break
-                rev_code = _OPPOSITE_DIRECTION[curr_dir].short_code
+                rev_code = curr_dir.opposite.short_code
                 forward_codes = [d for d in cardinal_walk if d != rev_code]
                 if len(forward_codes) != 1:
                     break
                 next_code = forward_codes[0]
-                next_dir = _SHORT_CODE_TO_DIRECTION[next_code]
+                next_dir = Direction.from_short_code(next_code)
+                if next_dir is None:
+                    break
                 if adj_now.get(next_code) == "+":
                     door_key = self.controls.direction_key(next_dir)
                     self._pty.send_keys([door_key])

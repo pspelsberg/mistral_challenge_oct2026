@@ -6,7 +6,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from rogue_agent.shared.domain import GameState, VisibleStatus
+from rogue_agent.shared.domain import (
+    DIRECTION_DELTAS_BY_CODE,
+    GameState,
+    VisibleStatus,
+)
 
 # Rogue 5.4.4 status bar format on row 23:
 # "Level: 1  Gold: 0      Hp: 12(12)  Str: 16(16)  Arm: 4   Exp: 1/0  Hungry"
@@ -37,17 +41,6 @@ _ITEM_PROMPT_PATTERNS = (
     "what do you want to call it",
     "call it:",
 )
-
-_DIRECTION_DELTAS: dict[str, tuple[int, int]] = {
-    "N": (-1, 0),
-    "S": (1, 0),
-    "E": (0, 1),
-    "W": (0, -1),
-    "NE": (-1, 1),
-    "NW": (-1, -1),
-    "SE": (1, 1),
-    "SW": (1, -1),
-}
 
 _DIAGONAL_DIRS = frozenset({"NE", "NW", "SE", "SW"})
 _WALKABLE_CHARS = frozenset(
@@ -133,9 +126,6 @@ def parse_terminal_screen(
     if player_coords is not None:
         pr, pc = player_coords
         # Detect if player is currently in a doorway/corridor where diagonal moves are forbidden.
-        # Note: a room corner has 2 perpendicular walls (e.g. N and W) and 2 floor '.' neighbors,
-        # which is inside a room and MUST allow diagonal moves. A doorway has 2 opposite walls
-        # (N & S, or E & W), and a corridor has '#' neighbors with no room floor '.' neighbors.
         n_ch = padded_lines[pr - 1][pc] if pr > 1 else " "
         s_ch = padded_lines[pr + 1][pc] if pr < 22 else " "
         w_ch = padded_lines[pr][pc - 1] if pc > 0 else " "
@@ -148,7 +138,7 @@ def parse_terminal_screen(
         )
         in_doorway_or_corridor = on_doorway or on_corridor
 
-        for dir_name, (dr, dc) in _DIRECTION_DELTAS.items():
+        for dir_name, (dr, dc) in DIRECTION_DELTAS_BY_CODE.items():
             nr, nc = pr + dr, pc + dc
             if 1 <= nr <= 22 and 0 <= nc < 80:
                 ch = padded_lines[nr][nc]
@@ -156,7 +146,6 @@ def parse_terminal_screen(
                 is_walkable_tile = ch in _WALKABLE_CHARS or ("A" <= ch <= "Z")
                 if not is_walkable_tile:
                     continue
-                # In Rogue 5.4.4, diagonal movement into/out of doorways ('+') or corridors ('#') is blocked
                 if dir_name in _DIAGONAL_DIRS and (
                     in_doorway_or_corridor or ch in ("+", "#")
                 ):
